@@ -3,140 +3,175 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pine Script Checker</title>
+<title>Pine Script Check</title>
 <style>
   * { box-sizing: border-box; }
   body { margin:0; padding:12px; background:#0e0e0e; color:#e8e8e8;
          font-family:-apple-system,Roboto,Segoe UI,sans-serif; }
   h1 { font-size:16px; margin:0 0 4px; }
   .sub { font-size:12px; color:#8b8b8b; margin:0 0 10px; line-height:1.5; }
-  button { border:0; border-radius:10px; color:#fff; font-weight:700;
-           font-size:15px; padding:14px; }
+  button { border:0; border-radius:10px; color:#fff; font-weight:700; font-size:15px; padding:14px; }
   #run { background:#0a8f3c; width:100%; font-size:17px; padding:16px; }
-  #clr { background:#3a3a3a; flex:1; }
-  #sample { background:#3a3a3a; flex:1; }
+  #clr, #paste { background:#3a3a3a; flex:1; }
   .row { display:flex; gap:8px; margin:8px 0; }
-  textarea { width:100%; height:34vh; background:#000; color:#9ae6b4;
+  textarea { width:100%; height:36vh; background:#000; color:#9ae6b4;
              border:1px solid #2c2c2c; border-radius:10px; padding:10px;
              font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11.5px;
              line-height:1.4; white-space:pre; }
-  #out { margin-top:10px; font-size:13px; }
-  .ok { color:#4ade80; font-weight:700; font-size:15px; padding:10px 0; }
-  .bad { color:#f87171; }
+  #out { margin-top:12px; font-size:13px; }
+  .ok { color:#4ade80; font-weight:700; font-size:15px; padding:8px 0; }
+  .bad { color:#f87171; font-weight:700; padding:6px 0; }
   .err { background:#1c1010; border-left:3px solid #f87171; border-radius:6px;
          padding:9px 10px; margin:8px 0; }
+  .warn { background:#1c1708; border-left:3px solid #fbbf24; border-radius:6px;
+          padding:9px 10px; margin:8px 0; }
   .loc { color:#fbbf24; font-size:12px; font-weight:700; margin-bottom:4px; }
   .msg { color:#fca5a5; font-size:12.5px; line-height:1.45; }
+  .warn .msg { color:#fde68a; }
   .src { color:#9ae6b4; font-family:ui-monospace,Menlo,Consolas,monospace;
          font-size:11px; margin-top:6px; white-space:pre-wrap; word-break:break-all; }
-  .busy { color:#fbbf24; font-weight:700; padding:10px 0; }
+  code { background:#1e1e1e; padding:1px 5px; border-radius:4px; color:#9ae6b4; }
 </style>
 </head>
 <body>
-<h1>Pine Script Checker</h1>
-<p class="sub">Paste a Pine script and it is compiled by <b>TradingView's own
-compiler</b> &mdash; the same one the Pine Editor uses. Errors come back with the
-exact line and column. Nothing is saved anywhere.</p>
+<h1>Pine Script Check</h1>
+<p class="sub">Catches the mistakes that waste time in the Pine Editor &mdash;
+before you paste. Runs entirely on your phone; nothing is uploaded.</p>
 
 <textarea id="code" spellcheck="false" autocapitalize="off" autocorrect="off"
-          placeholder="//@version=5&#10;indicator(&quot;My script&quot;)&#10;plot(close)"></textarea>
+          placeholder="Paste your Pine script here"></textarea>
 <div class="row">
-  <button id="sample">SAMPLE</button>
+  <button id="paste">PASTE</button>
   <button id="clr">CLEAR</button>
 </div>
-<button id="run">CHECK SCRIPT</button>
+<button id="run">CHECK</button>
 <div id="out"></div>
 
 <script>
-const ENDPOINT =
-  'https://pine-facade.tradingview.com/pine-facade/translate_light/?user_name=anonymous';
-
-const ta  = document.getElementById('code');
+const ta = document.getElementById('code');
 const out = document.getElementById('out');
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
+document.getElementById('clr').onclick = () => { ta.value=''; out.innerHTML=''; ta.focus(); };
 
-document.getElementById('clr').onclick = () => {
-  ta.value = '';
-  out.innerHTML = '';
-  ta.focus();
+document.getElementById('paste').onclick = async () => {
+  try {
+    const t = await navigator.clipboard.readText();
+    ta.value = t;
+    document.getElementById('run').click();
+  } catch (e) {
+    out.innerHTML = '<div class="warn"><div class="msg">Clipboard is blocked here. '
+      + 'Long-press the box above and choose Paste.</div></div>';
+    ta.focus();
+  }
 };
 
-document.getElementById('sample').onclick = () => {
-  ta.value = '//@version=5\nindicator("My script", overlay=true)\n'
-           + 'len = input.int(14, "Length")\n'
-           + 'plot(ta.sma(close, len), "SMA", color=color.blue)\n'
-           + 'plot(ta.rsi(close, len), "RSI")\n';
-  out.innerHTML = '';
-};
-
-document.getElementById('run').onclick = async () => {
+document.getElementById('run').onclick = () => {
   const src = ta.value;
-  if (!src.trim()) {
-    out.innerHTML = '<div class="busy">Paste a script first.</div>';
-    return;
+  if (!src.trim()) { out.innerHTML = '<div class="warn"><div class="msg">Paste a script first.</div></div>'; return; }
+
+  const lines = src.split('\n');
+  const errs = [], warns = [];
+
+  // 1. declaration statements — exactly one allowed (this is CE10243)
+  const decls = [];
+  lines.forEach((l, i) => {
+    const t = l.trim();
+    if (/^(indicator|strategy|library)\s*\(/.test(t)) decls.push({n: i + 1, txt: t});
+  });
+  if (decls.length === 0) {
+    errs.push({loc: 'top of file', msg: 'No declaration statement. A script needs exactly one of '
+      + '<code>indicator()</code>, <code>strategy()</code> or <code>library()</code>.', src: ''});
+  } else if (decls.length > 1) {
+    errs.push({loc: 'line ' + decls[1].n,
+      msg: '<b>' + decls.length + ' declaration statements.</b> Only one is allowed '
+         + '(error CE10243). The editor starts you with a template &mdash; delete it '
+         + 'before pasting: Select all &rarr; backspace &rarr; then paste.',
+      src: decls[1].txt});
   }
 
-  // Any non-ASCII character breaks the Pine compiler. This is what happens when
-  // a script is copied from a chat message with typographic dashes or quotes.
-  const bad = [];
-  src.split('\n').forEach((line, i) => {
-    for (const ch of line) {
-      if (ch.codePointAt(0) > 127) bad.push({line: i + 1, ch: ch});
+  // 2. leftover TradingView template
+  lines.forEach((l, i) => {
+    if (/^\s*\/\/\s*[©\u00a9]/.test(l) || /indicator\(\s*["']My script["']\s*\)/.test(l)) {
+      warns.push({loc: 'line ' + (i + 1),
+        msg: 'Leftover TradingView template. Delete it before pasting yours.',
+        src: l.trim()});
     }
   });
 
-  out.innerHTML = '<div class="busy">compiling ...</div>';
-
-  let json = null;
-  try {
-    const body = new URLSearchParams();
-    body.set('source', src);
-    const r = await fetch(ENDPOINT, { method: 'POST', body: body });
-    json = await r.json();
-  } catch (e) {
-    out.innerHTML = '<div class="bad">Could not reach the compiler: '
-                  + esc(e.message) + '</div>';
-    return;
-  }
-
-  const errs = ((json || {}).result || {}).errors2 || [];
-  const lines = src.split('\n');
-  let html = '';
-
-  if (bad.length) {
-    html += '<div class="bad" style="margin-bottom:8px"><b>'
-          + bad.length + ' non-ASCII character(s)</b> &mdash; these always break '
-          + 'Pine. Usually a dash or quote pasted from a chat message.</div>';
-    bad.slice(0, 6).forEach(b => {
-      html += '<div class="err"><div class="loc">line ' + b.line + '</div>'
-            + '<div class="msg">character ' + esc(b.ch)
-            + ' (U+' + b.ch.codePointAt(0).toString(16).toUpperCase()
-            + ') is not ASCII</div></div>';
-    });
-  }
-
-  if (!errs.length) {
-    html += '<div class="ok">No errors \u2713 the script compiles</div>';
-    if (!bad.length) {
-      html += '<div class="sub">Add it to a chart in TradingView to see the plots '
-            + 'and run the strategy tester.</div>';
-    }
-  } else {
-    html += '<div class="bad" style="font-weight:700;padding:6px 0">'
-          + errs.length + ' error(s)</div>';
-    errs.forEach(e => {
-      const st = e.start || {};
-      const ln = st.line;
-      html += '<div class="err"><div class="loc">line ' + ln + ', col '
-            + st.column + '</div><div class="msg">' + esc(e.message) + '</div>';
-      if (ln && lines[ln - 1] !== undefined) {
-        html += '<div class="src">' + esc(lines[ln - 1]) + '</div>';
+  // 3. non-ASCII — always breaks Pine
+  lines.forEach((l, i) => {
+    for (const ch of l) {
+      if (ch.codePointAt(0) > 127) {
+        errs.push({loc: 'line ' + (i + 1),
+          msg: 'Non-ASCII character <code>' + esc(ch) + '</code> (U+'
+             + ch.codePointAt(0).toString(16).toUpperCase()
+             + '). Pine rejects these. Usually a dash, arrow or quote copied from a chat message.',
+          src: l.trim().slice(0, 90)});
+        break;
       }
-      html += '</div>';
-    });
+    }
+  });
+
+  // 4. version tag
+  if (!/^\s*\/\/@version=\s*[456]\s*$/.test(lines[0] || '')) {
+    const at = lines.findIndex(l => /^\s*\/\/@version=/.test(l));
+    if (at < 0) warns.push({loc: 'line 1', msg: 'Missing <code>//@version=5</code> on the first line.', src: ''});
+    else if (at > 0) warns.push({loc: 'line ' + (at + 1),
+      msg: '<code>//@version=</code> must be the very first line.', src: lines[at].trim()});
+  }
+
+  // 5. unbalanced brackets (ignore brackets inside comments and strings)
+  const pairs = {')':'(', ']':'[', '}':'{'};
+  const open = {'(':0, '[':0, '{':0};
+  let inStr = null;
+  lines.forEach((raw, i) => {
+    let l = raw;
+    const c = l.indexOf('//');
+    if (c >= 0 && !inStr) l = l.slice(0, c);
+    for (let k = 0; k < l.length; k++) {
+      const ch = l[k];
+      if (inStr) { if (ch === inStr) inStr = null; continue; }
+      if (ch === '"' || ch === "'") { inStr = ch; continue; }
+      if (open[ch] !== undefined) open[ch]++;
+      else if (pairs[ch]) {
+        open[pairs[ch]]--;
+        if (open[pairs[ch]] < 0) {
+          errs.push({loc: 'line ' + (i + 1),
+            msg: 'Unmatched <code>' + ch + '</code>.', src: raw.trim().slice(0, 90)});
+          open[pairs[ch]] = 0;
+        }
+      }
+    }
+  });
+  ['(', '[', '{'].forEach(ch => {
+    if (open[ch] > 0) errs.push({loc: 'end of script',
+      msg: open[ch] + ' unclosed <code>' + ch + '</code>.', src: ''});
+  });
+
+  // 6. tabs mixed with spaces in indentation
+  if (lines.some(l => /^\t+ /.test(l) || /^ +\t/.test(l))) {
+    warns.push({loc: 'indentation', msg: 'Tabs and spaces mixed in indentation. Use spaces only.', src: ''});
+  }
+
+  let html = '';
+  if (!errs.length && !warns.length) {
+    html = '<div class="ok">No problems found \u2713</div>'
+         + '<div class="sub">Paste it into the Pine Editor and press Add to chart. '
+         + 'If TradingView still reports something, send the message to me.</div>';
+  } else {
+    if (errs.length) {
+      html += '<div class="bad">' + errs.length + ' problem(s) that will break the script</div>';
+      errs.forEach(e => { html += '<div class="err"><div class="loc">' + e.loc + '</div>'
+        + '<div class="msg">' + e.msg + '</div>'
+        + (e.src ? '<div class="src">' + esc(e.src) + '</div>' : '') + '</div>'; });
+    }
+    if (warns.length) {
+      html += '<div class="bad" style="color:#fbbf24">' + warns.length + ' warning(s)</div>';
+      warns.forEach(e => { html += '<div class="warn"><div class="loc">' + e.loc + '</div>'
+        + '<div class="msg">' + e.msg + '</div>'
+        + (e.src ? '<div class="src">' + esc(e.src) + '</div>' : '') + '</div>'; });
+    }
   }
   out.innerHTML = html;
 };
