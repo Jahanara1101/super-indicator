@@ -40,9 +40,51 @@ those are the *recent* windows. The final window (4500-6000) is positive only
 because one trade is 72% of it. So gold 1H has a real losing stretch in recent
 data and is outlier-dependent at the end.
 
-**Do NOT trade gold with this model without further work.** It needs either a
-regime filter (trade only when the higher-timeframe is trending) or a different
-model entirely for gold.
+**Do NOT trade gold with this model.** Both fixes I proposed were tested and
+both FAILED — see "Gold: everything that was tried" below.
+
+## Gold: everything that was tried (all failed)
+
+Gold is the priority market, so three separate approaches were tested on it.
+
+**1. Higher-timeframe regime filter** (`regime_test.py`) — only take longs when
+the last closed HTF bar closes above a rising EMA(50) and shorts below a falling
+one. Hypothesis: the model loses in ranges and needs HTF trend.
+
+| Market | Unfiltered | With regime filter |
+|---|---|---|
+| GOLD 1H | 8/10 windows | **4/10 — worse** |
+| GOLD 15m | 9/12 | 9/12 — no gain |
+| BTC 1H | 12/12 | 9/12 — worse |
+| ETH 1H | 12/12 | 12/12 but trades cut 30-58 → 2-16 (sample too small) |
+
+The filter cut gold 1H from 36 trades to 1 in the first window and made the
+recent windows worse (-0.502R). **Not shipped.**
+
+**2. Trend-pullback model** (`gold_model.py`) — EMA 50/200 trend + pullback to
+EMA 50, 1.5 ATR stop, 2R target. Hypothesis: gold trends, so a trend model suits
+it better than a sweep-reversal.
+
+| Market | Windows positive | Full sample |
+|---|---|---|
+| GOLD 1H | **4/10** | n=881, +0.165R, PF 1.27 |
+| GOLD 15m | 9/12 | n=937, +0.089R, PF 1.14 |
+| GOLD 4H | 1/1 (only 1551 bars exist) | n=141, +0.191R, PF 1.32 |
+| BTC 1H | 11/12 | n=1092, +0.088R, PF 1.14 |
+| ETH 1H | 7/12 — worse than ICT | n=1158, +0.145R, PF 1.23 |
+
+Gold 1H got **worse** (4/10 vs 8/10). The trend-pullback model fires far more
+often (881 trades vs 154) but with a thin edge that does not survive windows.
+
+**Conclusion:** two structurally different models, plus a regime filter, all fail
+on gold 1H. That is information, not bad luck — a model choice is not the
+problem. Gold needs either a different data resolution (its 4H sample is only
+1551 bars, too short to conclude) or features this engine does not compute
+(session/kill-zone timing, DXY correlation, real rates). Do not ship anything for
+gold until a window test passes.
+
+**Works and is usable:** ETH 1H (12/12 clean) and BTC 1H (12/12, one window
+outlier-driven).
 
 **Does NOT work on GOLD 15m.** The full-sample number looks good (+89R, PF 2.14)
 but it is a mirage: **one trade is 59% of the entire P&L**, and the first half is
@@ -78,5 +120,11 @@ to fire that often is exactly what destroys the edge.
 - `backtest_ict.py` — paginated history fetch + market matrix
 - `robustness.py` — parameter neighbourhood + out-of-sample split + distribution
 - `gold_check.py` — 12 variants tested on gold, out-of-sample
-- `final_numbers.py` — the table above
+- `stability.py` — rolling-window stability test
+- `regime_test.py` — HTF regime filter, before/after (failed on gold)
+- `gold_model.py` — trend-pullback alternative model (also failed on gold)
+- `final_numbers.py` — the headline table
+- `make_pine_lint.py` — builds the client-side Pine pre-flight checker page
+- `make_copy_page.py` — builds the one-tap copy page for a Pine script
+- `tests/check_pine.py` — validates a Pine file against TradingView's compiler
 - `ict_model.pine` — the TradingView port (validated against TradingView's compiler)
