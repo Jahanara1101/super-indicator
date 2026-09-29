@@ -1,0 +1,214 @@
+//@version=5
+indicator("ICT Liquidity Model", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=2000)
+
+dispMult  = input.float(1.0,  "Displacement body x ATR", minval=0.1, step=0.1)
+minPierce = input.float(0.10, "Min sweep pierce x ATR", minval=0.0, step=0.05)
+minRR     = input.float(1.5,  "Min R:R to first target", minval=0.5, step=0.1)
+confWin   = input.int(6,      "Confirm window (bars)", minval=1)
+entryVal  = input.int(10,     "Entry valid (bars)", minval=1)
+stopBuf   = input.float(0.15, "Stop buffer x ATR", minval=0.0, step=0.05)
+maxStop   = input.float(3.0,  "Max stop x ATR", minval=0.5, step=0.5)
+sweepLb   = input.int(40,     "Sweep lookback", minval=5)
+mssLb     = input.int(30,     "MSS lookback", minval=5)
+pivLen    = input.int(2,      "Pivot strength", minval=1)
+rangeLb   = input.int(100,    "Dealing range lookback", minval=20)
+usePD     = input.bool(true,  "Longs in discount, shorts in premium")
+showZones = input.bool(true,  "Draw entry / SL / TP")
+
+atrV = ta.atr(14)
+
+// -- confirmed fractal pivots, with the bar they formed on -----------------
+ph = ta.pivothigh(high, pivLen, pivLen)
+pl = ta.pivotlow(low, pivLen, pivLen)
+
+var array<float> hsPx = array.new_float(0)
+var array<int>   hsBi = array.new_int(0)
+var array<float> lsPx = array.new_float(0)
+var array<int>   lsBi = array.new_int(0)
+
+if not na(ph)
+    array.push(hsPx, ph)
+    array.push(hsBi, bar_index - pivLen)
+    if array.size(hsPx) > 100
+        array.shift(hsPx)
+        array.shift(hsBi)
+if not na(pl)
+    array.push(lsPx, pl)
+    array.push(lsBi, bar_index - pivLen)
+    if array.size(lsPx) > 100
+        array.shift(lsPx)
+        array.shift(lsBi)
+
+// -- MSS level: nearest breakable structure (highest low, lowest high) -----
+float mssHi = na
+if array.size(hsPx) > 0
+    for i = 0 to array.size(hsPx) - 1
+        if array.get(hsBi, i) >= bar_index - mssLb
+            v = array.get(hsPx, i)
+            mssHi := na(mssHi) ? v : math.min(mssHi, v)
+float mssLo = na
+if array.size(lsPx) > 0
+    for i = 0 to array.size(lsPx) - 1
+        if array.get(lsBi, i) >= bar_index - mssLb
+            v = array.get(lsPx, i)
+            mssLo := na(mssLo) ? v : math.max(mssLo, v)
+
+// -- sweepable liquidity: nearest swing below / above price ----------------
+float swLowRef = na
+if array.size(lsPx) > 0
+    for i = 0 to array.size(lsPx) - 1
+        if array.get(lsBi, i) >= bar_index - sweepLb
+            v = array.get(lsPx, i)
+            if v < close
+                swLowRef := na(swLowRef) ? v : math.max(swLowRef, v)
+float swHighRef = na
+if array.size(hsPx) > 0
+    for i = 0 to array.size(hsPx) - 1
+        if array.get(hsBi, i) >= bar_index - sweepLb
+            v = array.get(hsPx, i)
+            if v > close
+                swHighRef := na(swHighRef) ? v : math.min(swHighRef, v)
+
+// -- 1. SWEEP --------------------------------------------------------------
+bullSweep = not na(swLowRef)  and low  < swLowRef  - minPierce * atrV and close > swLowRef
+bearSweep = not na(swHighRef) and high > swHighRef + minPierce * atrV and close < swHighRef
+
+var int   swDir = 0
+var int   swBar = na
+var float swPx  = na
+var float swRef = na
+var float swA   = na
+
+if swDir == 0
+    if bullSweep
+        swDir := 1
+        swBar := bar_index
+        swPx  := low
+        swRef := swLowRef
+        swA   := atrV
+    else if bearSweep
+        swDir := -1
+        swBar := bar_index
+        swPx  := high
+        swRef := swHighRef
+        swA   := atrV
+else if bar_index - swBar > confWin
+    swDir := 0
+
+// -- 2/3. DISPLACEMENT + MSS -----------------------------------------------
+body  = math.abs(close - open)
+dispU = close > open and body >= dispMult * atrV
+dispD = close < open and body >= dispMult * atrV
+
+newLong  = false
+newShort = false
+float entryPx = na
+float stopPx  = na
+float riskPx  = na
+float tpA = na
+float tpB = na
+float tpC = na
+float tpD = na
+
+if swDir == 1 and bar_index > swBar and dispU and not na(mssHi) and close > mssHi
+    newLong := true
+else if swDir == -1 and bar_index > swBar and dispD and not na(mssLo) and close < mssLo
+    newShort := true
+
+if newLong or newShort
+    d = newLong ? 1 : -1
+
+    // 4. entry: highest bullish FVG top below price, else OTE 70.5%
+    float fvgTop = na
+    span = bar_index - swBar
+    if span >= 3
+        for j = 1 to math.min(span - 2, 30)
+            gLo = high[j + 1]
+            gHi = low[j - 1]
+            if gHi > gLo and gHi < close
+                fvgTop := na(fvgTop) ? gHi : math.max(fvgTop, gHi)
+    entryPx := na(fvgTop) ? close - 0.705 * (close - swPx) : fvgTop
+
+    // 5. stop beyond the sweep extreme
+    stopPx := d > 0 ? swPx - stopBuf * swA : swPx + stopBuf * swA
+    riskPx := d > 0 ? entryPx - stopPx : stopPx - entryPx
+
+    // 6. targets: next opposing liquidity, then dealing range, then 2R/3R
+    rangeHi = ta.highest(high, rangeLb)
+    rangeLo = ta.lowest(low, rangeLb)
+    float pool = na
+    if d > 0
+        for i = 0 to array.size(hsPx) - 1
+            v = array.get(hsPx, i)
+            if v > entryPx + minRR * riskPx
+                pool := na(pool) ? v : math.min(pool, v)
+    else
+        for i = 0 to array.size(lsPx) - 1
+            v = array.get(lsPx, i)
+            if v < entryPx - minRR * riskPx
+                pool := na(pool) ? v : math.max(pool, v)
+    tpA := pool
+    tpB := d > 0 ? rangeHi : rangeLo
+    tpC := entryPx + d * 2.0 * riskPx
+    tpD := entryPx + d * 3.0 * riskPx
+
+    // guards: sane stop, acceptable R:R, correct premium/discount side
+    mid = (rangeHi + rangeLo) / 2
+    badStop = riskPx <= 0 or riskPx > maxStop * swA
+    badRR   = na(tpA) or math.abs(tpA - entryPx) < minRR * riskPx
+    badSide = usePD and ((d > 0 and entryPx > mid) or (d < 0 and entryPx < mid))
+    if badStop or badRR or badSide
+        newLong  := false
+        newShort := false
+
+if newLong or newShort
+    swDir := 0
+
+// -- PLOTS -----------------------------------------------------------------
+plot(atrV, "ATR(14)", display=display.data_window)
+plot(ta.highest(high, rangeLb), "Range high", color=color.new(color.gray, 70))
+plot(ta.lowest(low, rangeLb), "Range low", color=color.new(color.gray, 70))
+
+plotshape(newLong,  "LONG",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(newShort, "SHORT", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.small)
+
+if showZones and (newLong or newShort)
+    d = newLong ? 1 : -1
+    line.new(bar_index, entryPx, bar_index + 1, entryPx, color=color.new(color.blue, 0), width=2, style=line.style_dashed)
+    line.new(bar_index, stopPx,  bar_index + 1, stopPx,  color=color.new(color.red, 0), width=2)
+    if not na(tpA)
+        line.new(bar_index, tpA, bar_index + 1, tpA, color=color.new(color.green, 0), width=1, style=line.style_dotted)
+    if not na(tpB)
+        line.new(bar_index, tpB, bar_index + 1, tpB, color=color.new(color.green, 20), width=1, style=line.style_dotted)
+    line.new(bar_index, tpC, bar_index + 1, tpC, color=color.new(color.green, 40), width=1, style=line.style_dotted)
+    line.new(bar_index, tpD, bar_index + 1, tpD, color=color.new(color.green, 60), width=1, style=line.style_dotted)
+    rr1 = na(tpA) ? na : math.abs(tpA - entryPx) / riskPx
+    label.new(bar_index, d > 0 ? low - 1.5 * atrV : high + 1.5 * atrV,
+         (newLong ? "LONG" : "SHORT") + "  E " + str.tostring(entryPx, format.mintick) +
+         "  SL " + str.tostring(stopPx, format.mintick) +
+         "  TP1 " + (na(tpA) ? "-" : str.tostring(tpA, format.mintick)) +
+         "  (" + (na(rr1) ? "-" : str.tostring(rr1, "#.0")) + "R)",
+         style=d > 0 ? label.style_label_up : label.style_label_down,
+         color=d > 0 ? color.new(color.green, 15) : color.new(color.red, 15),
+         textcolor=color.white, size=size.small)
+
+// -- INFO PANEL ------------------------------------------------------------
+var table info = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    lastDir = swDir == 1 ? "sweep of lows" : swDir == -1 ? "sweep of highs" : "flat"
+    table.cell(info, 0, 0, "ICT LIQUIDITY MODEL", bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, newLong ? "LONG" : newShort ? "SHORT" : "WAIT",
+         bgcolor=newLong ? color.green : newShort ? color.red : color.gray, text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 1, "state", text_size=size.small)
+    table.cell(info, 1, 1, lastDir, text_size=size.small)
+    table.cell(info, 0, 2, "sweeps pending", text_size=size.small)
+    table.cell(info, 1, 2, str.tostring(swDir == 0 ? 0 : 1), text_size=size.small)
+    table.cell(info, 0, 3, "ATR(14)", text_size=size.small)
+    table.cell(info, 1, 3, str.tostring(atrV, format.mintick), text_size=size.small)
+    table.cell(info, 0, 4, "entry / SL", text_size=size.small)
+    table.cell(info, 1, 4, na(entryPx) ? "-" : str.tostring(entryPx, format.mintick) + " / " + str.tostring(stopPx, format.mintick), text_size=size.small)
+    table.cell(info, 0, 5, "R:R to TP1", text_size=size.small)
+    table.cell(info, 1, 5, na(tpA) or na(riskPx) ? "-" : str.tostring(math.abs(tpA - entryPx) / riskPx, "#.0") + "R", text_size=size.small)
+
+alertcondition(newLong,  "ICT LONG",  "ICT Liquidity Model LONG")
+alertcondition(newShort, "ICT SHORT", "ICT Liquidity Model SHORT")
