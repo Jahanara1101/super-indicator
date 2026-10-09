@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Advanced Pattern Detection — APDS-N (gates only)</title>
+<title>Advanced Pattern Detection — APDS-N Pro</title>
 <style>
   * { box-sizing: border-box; }
   body { margin:0; padding:14px; background:#111; color:#eee;
@@ -26,8 +26,8 @@
 </style>
 </head>
 <body>
-<h1>Advanced Pattern Detection — APDS-N (gates only)</h1>
-<p class="meta">1630 lines &middot; 113383 characters &middot; //@version=6</p>
+<h1>Advanced Pattern Detection — APDS-N Pro</h1>
+<p class="meta">1737 lines &middot; 122209 characters &middot; //@version=6</p>
 <ol>
   <li>Tap <b>COPY</b> below</li>
   <li>Open TradingView &rarr; <b>Pine Editor</b></li>
@@ -43,7 +43,7 @@
 and choose Copy. The box is read-only so nothing can be changed by accident.</p>
 
 <script type="text/plain" id="src">//@version=6
-indicator("Advanced Pattern Detection System v2 [APDS-N]", shorttitle="APDS-N", overlay=true, max_bars_back=1200, max_lines_count=450, max_labels_count=500)
+indicator("Advanced Pattern Detection System v2 [APDS-N Pro]", shorttitle="APDS-N Pro", overlay=true, max_bars_back=1200, max_lines_count=450, max_labels_count=500, max_boxes_count=100)
 
 // Rebuild of the user's Advanced Pattern Detection System.
 // Detection and lifecycle updates run on CLOSED chart bars only.
@@ -72,6 +72,13 @@ indicator("Advanced Pattern Detection System v2 [APDS-N]", shorttitle="APDS-N", 
 //   3. Quieter defaults: the price-action family and Diamond are off.
 // No detection rule, shape score, evidence grade or lifecycle transition was
 // altered. The original author is not responsible for this modified version.
+//
+//   PASS 2 (APDS-N Pro) -- visuals only, no logic touched:
+//     - grade colouring (A+ gold / A aqua / B blue / watch grey)
+//     - rich signal label: entry, SL, TP, R/R, stop in ATR
+//     - TP1 1R / TP2 2R / TP3 own-projection ladder + shaded entry-to-target box
+//     - PRO dashboard: trend, session, live-pending counts, selected setup,
+//       plus RSI / VWAP / EMA context
 // ---------------------------------------------------------------------------
 
 // ============================================================================
@@ -214,6 +221,21 @@ minRiskATR = input.float(1.0, "Minimum stop distance / ATR", minval=0.0, maxval=
 trendRef = ta.ema(close, trendLen)
 sessionOK_now = not useSessionFilter or not na(time(timeframe.period, sessionSpec, sessionTz))
 
+g13 = "13 | Pro visuals (APDS-N Pro)"
+proGradeColors = input.bool(true, "Colour signals by GRADE, not direction", tooltip="A+ gold, A aqua, B blue, watch grey. Direction is still written in the label text. Off = the original direction colouring.", group=g13, display=display.data_window)
+proRichLabel = input.bool(true, "Rich signal label (entry / SL / TP / R-R)", group=g13, display=display.data_window)
+proTargetLadder = input.bool(true, "Draw TP1 / TP2 / TP3 ladder on selected signals", tooltip="TP1 = 1R, TP2 = 2R, TP3 = the pattern's own projection. Reference levels, not orders.", group=g13, display=display.data_window)
+proZoneBox = input.bool(true, "Shade the entry-to-target zone", group=g13, display=display.data_window)
+proDashboard = input.bool(true, "Show the PRO dashboard", group=g13, display=display.data_window)
+proDashPosition = input.string("top_left", "Dashboard position", options=["top_left", "top_center", "top_right", "middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group=g13, display=display.data_window)
+proShowRsi = input.bool(true, "Dashboard: RSI / VWAP / EMA context", group=g13, display=display.data_window)
+proRsiLen = input.int(14, "Dashboard RSI length", minval=2, maxval=100, group=g13, display=display.data_window)
+proEmaLen = input.int(200, "Dashboard higher-EMA length", minval=20, maxval=500, group=g13, display=display.data_window)
+
+rsiVal = ta.rsi(close, proRsiLen)
+vwapVal = ta.vwap(hlc3)
+emaLongVal = ta.ema(close, proEmaLen)
+
 if barstate.isfirst and not (gradeBThreshold < gradeAThreshold and gradeAThreshold < gradePlusThreshold)
     runtime.error("Evidence thresholds must satisfy B < A < A+. No automatic threshold reordering.")
 
@@ -290,6 +312,7 @@ var array<Pattern> eventPatterns = array.new<Pattern>()
 var array<label> eventLabels = array.new_label()
 var array<line> drawLines = array.new_line()
 var array<label> drawLabels = array.new_label()
+var array<box> drawBoxes = array.new_box()
 // Per-frame label-layout lanes. Cleared on barstate.islast before drawings are rebuilt.
 var array<int> rightLabelXs = array.new_int()
 var array<float> rightLabelYs = array.new_float()
@@ -345,6 +368,20 @@ f_dir(int direction) =>
 
 f_color(int direction) =>
     direction == 1 ? color.lime : direction == -1 ? color.red : color.orange
+
+f_proHue(Pattern p) =>
+    if not proGradeColors
+        f_color(p.direction)
+    else if not p.signalSelected
+        color.gray
+    else if p.grade >= 3
+        #FFD700
+    else if p.grade == 2
+        color.aqua
+    else if p.grade == 1
+        #4C8DFF
+    else
+        color.gray
 
 f_position(string p) =>
     switch p
@@ -1270,7 +1307,7 @@ f_renderEventMarkers() =>
             if code == 1 and p.representative and show_signals and (p.signalSelected or showWeakSignals)
                 bool weak = not p.signalSelected
                 string textSize = weak ? size.tiny : p.grade == 1 ? size.small : p.grade == 2 ? size.normal : size.large
-                color hue = weak ? color.new(color.gray, 78) : color.new(f_color(p.direction), p.grade == 1 ? 35 : p.grade == 2 ? 12 : 0)
+                color hue = weak ? color.new(color.gray, 78) : color.new(f_proHue(p), p.grade == 1 ? 35 : p.grade == 2 ? 12 : 0)
                 string style = weak ? label.style_circle : p.direction == 1 ? label.style_label_up : label.style_label_down
                 int x = not na(p.confirmedAt) ? p.confirmedAt : bar_index
 
@@ -1291,7 +1328,10 @@ f_renderEventMarkers() =>
 
                 // Weak/watch markers carry no chart text. Selected signals retain only the
                 // actionable direction + grade/score and the stable P reference.
-                string caption = weak ? "" : (p.direction == 1 ? "LONG " : "SHORT ") + f_gradeName(p.grade) + str.tostring(p.strength, "#") + "\n" + f_ref(p)
+                string richBody = (p.direction == 1 ? ">> LONG " : "<< SHORT ") + f_gradeName(p.grade) + " " + str.tostring(p.strength, "#") + "\n" + f_ref(p) + "  @ " + f_price(p.entry) + "\nSL " + f_price(p.stop) + "   TP " + f_price(p.target) + "\nR/R " + (na(p.rr) ? "-" : str.tostring(p.rr, "#.##")) + "   stop " + (na(p.formationATR) or p.formationATR <= tick ? "-" : str.tostring(math.abs(p.entry - p.stop) / p.formationATR, "#.#")) + " ATR"
+                string plainBody = (p.direction == 1 ? "LONG " : "SHORT ") + f_gradeName(p.grade) + str.tostring(p.strength, "#") + "\n" + f_ref(p)
+                bool canRich = proRichLabel and not na(p.entry) and not na(p.stop) and not na(p.target)
+                string caption = weak ? "" : canRich ? richBody : plainBody
                 string tooltip = (weak ? "WATCH ONLY: below minimum signal grade.\nGrade=" + f_gradeName(p.grade) + "\n" : "SELECTED REFERENCE SETUP, not an executed order.\n") + f_ref(p) + " | " + p.name + "\n" + f_evidenceText(p)
                 tooltip += "\nReference close=" + f_price(p.entry) + "\nTP / profit reference=" + f_price(p.target) + "\nSL / invalidation reference=" + f_price(p.stop) + "\nConfirmed bar=" + str.tostring(p.confirmedAt) + "\nID=" + p.key
                 f_eventLabel(x, y, caption, hue, style, textSize, tooltip)
@@ -1575,6 +1615,25 @@ f_drawPattern(Pattern p, int rank, int latestClosed) =>
         float targetLabelY = f_rightLabelY(levelEnd, p.target, rightGap, p.direction)
         float stopLabelY = f_rightLabelY(levelEnd, p.stop, rightGap, -p.direction)
 
+        // --- APDS-N Pro: TP1 / TP2 / TP3 ladder + shaded zone ---
+        if selected and not na(p.entry) and not na(p.stop)
+            float proRisk = math.abs(p.entry - p.stop)
+            if proTargetLadder and proRisk > tick
+                float tp1 = p.direction == 1 ? p.entry + proRisk : p.entry - proRisk
+                float tp2 = p.direction == 1 ? p.entry + 2.0 * proRisk : p.entry - 2.0 * proRisk
+                f_line(p.confirmedAt, tp1, levelEnd, tp1, color.new(#00E5A0, 40), line.style_dashed, 1)
+                f_line(p.confirmedAt, tp2, levelEnd, tp2, color.new(#00E5A0, 26), line.style_dashed, 1)
+                float tp1LabelY = f_rightLabelY(levelEnd, tp1, rightGap, p.direction)
+                float tp2LabelY = f_rightLabelY(levelEnd, tp2, rightGap, p.direction)
+                f_labelTip(levelEnd, tp1LabelY, "TP1  1R", color.new(#00E5A0, 18), label.style_label_left, size.tiny, f_ref(p) + " | 1R projection = " + f_price(tp1) + "\nReference level, not an order.", 24)
+                f_labelTip(levelEnd, tp2LabelY, "TP2  2R", color.new(#00E5A0, 4), label.style_label_left, size.tiny, f_ref(p) + " | 2R projection = " + f_price(tp2) + "\nReference level, not an order.", 14)
+            if proZoneBox and not na(p.target) and math.abs(p.target - p.entry) > tick
+                float zoneTop = math.max(p.entry, p.target)
+                float zoneBottom = math.min(p.entry, p.target)
+                box id = box.new(p.confirmedAt, zoneTop, levelEnd, zoneBottom, border_color=color.new(color.gray, 90), border_width=1, bgcolor=color.new(p.direction == 1 ? color.lime : color.red, 89))
+                array.push(drawBoxes, id)
+
+
         if math.abs(entryLabelY - p.entry) > tick
             f_line(levelEnd, p.entry, levelEnd, entryLabelY, color.new(color.gray, 76), line.style_dotted, 1)
         if math.abs(targetLabelY - p.target) > tick
@@ -1594,6 +1653,7 @@ var table patternTable = table.new(f_position(panel_position), 8, max_patterns +
 // Prevent the two panels from hiding one another when identical positions are selected.
 string effectiveReasonPosition = reason_position == panel_position ? (panel_position == "bottom_right" ? "bottom_left" : "bottom_right") : reason_position
 var table reasonTable = table.new(f_position(effectiveReasonPosition), 1, reason_limit + 1, bgcolor=color.new(color.black, panel_transparency), border_color=color.new(color.gray, 65), border_width=1)
+var table proBoard = table.new(f_position(proDashPosition), 2, 10, bgcolor=color.new(color.black, 14), border_color=color.new(color.gray, 52), border_width=1)
 if barstate.isfirst
     table.merge_cells(patternTable, 0, max_patterns + 1, 7, max_patterns + 1)
     table.merge_cells(patternTable, 0, max_patterns + 2, 7, max_patterns + 2)
@@ -1603,6 +1663,8 @@ if barstate.islast
         line.delete(array.pop(drawLines))
     while array.size(drawLabels) > 0
         label.delete(array.pop(drawLabels))
+    while array.size(drawBoxes) > 0
+        box.delete(array.pop(drawBoxes))
     array.clear(rightLabelXs)
     array.clear(rightLabelYs)
     array.clear(rightLabelGaps)
@@ -1671,7 +1733,52 @@ if barstate.islast
         if volumeFilter and (na(volume) or na(previousVolumeMean) or previousVolumeMean <= 0.0)
             caution += " | Volume unavailable: confirmation blocked"
         table.cell(patternTable, 0, max_patterns + 1, info, text_color=color.silver, text_size=textSize)
-        table.cell(patternTable, 0, max_patterns + 2, caution, text_color=diagnostics.capacitySkipped > 0 ? color.orange : color.silver, text_size=textSize)</script>
+        table.cell(patternTable, 0, max_patterns + 2, caution, text_color=diagnostics.capacitySkipped > 0 ? color.orange : color.silver, text_size=textSize)
+    // ========================================================================
+    // APDS-N Pro dashboard
+    // ========================================================================
+    if proDashboard
+        table.clear(proBoard, 0, 0, 1, 9)
+        string boardSize = f_textSize()
+        bool up = not na(trendRef) and close > trendRef
+        bool down = not na(trendRef) and close < trendRef
+        string trendTxt = na(trendRef) ? "n/a" : up ? "UP  >>" : down ? "DOWN  <<" : "FLAT"
+        color trendHue = na(trendRef) ? color.gray : up ? color.lime : down ? color.red : color.orange
+        Pattern best = na
+        if array.size(displayed) > 0
+            for i = 0 to array.size(displayed) - 1
+                Pattern q = array.get(registry, array.get(displayed, i))
+                if q.state == 1 and q.signalSelected and not na(q.confirmedAt)
+                    best := q
+                    break
+        table.cell(proBoard, 0, 0, "APDS-N PRO", text_color=color.white, bgcolor=color.new(color.purple, 18), text_size=boardSize)
+        table.cell(proBoard, 1, 0, "reading tool, not a signal", text_color=color.silver, bgcolor=color.new(color.purple, 18), text_size=boardSize)
+        table.cell(proBoard, 0, 1, "Trend (EMA " + str.tostring(trendLen) + ")", text_color=color.silver, text_size=boardSize)
+        table.cell(proBoard, 1, 1, trendTxt, text_color=trendHue, text_size=boardSize)
+        table.cell(proBoard, 0, 2, "Session / gate", text_color=color.silver, text_size=boardSize)
+        table.cell(proBoard, 1, 2, sessionOK_now ? "OPEN" : "CLOSED", text_color=sessionOK_now ? color.lime : color.gray, text_size=boardSize)
+        table.cell(proBoard, 0, 3, "Live / pending", text_color=color.silver, text_size=boardSize)
+        table.cell(proBoard, 1, 3, str.tostring(active) + " / " + str.tostring(pending), text_color=color.white, text_size=boardSize)
+        if not na(best)
+            float riskPts = math.abs(best.entry - best.stop)
+            float tpDist = math.abs(best.target - best.entry)
+            float atrStop = na(best.formationATR) or best.formationATR <= tick ? na : riskPts / best.formationATR
+            table.cell(proBoard, 0, 4, "Selected setup", text_color=color.silver, text_size=boardSize)
+            table.cell(proBoard, 1, 4, f_ref(best) + "  " + best.name, text_color=color.white, text_size=boardSize)
+            table.cell(proBoard, 0, 5, "Direction / grade", text_color=color.silver, text_size=boardSize)
+            table.cell(proBoard, 1, 5, f_dir(best.direction) + "  " + f_gradeName(best.grade) + " " + str.tostring(best.strength, "#"), text_color=f_proHue(best), text_size=boardSize)
+            table.cell(proBoard, 0, 6, "Entry / SL / TP", text_color=color.silver, text_size=boardSize)
+            table.cell(proBoard, 1, 6, f_price(best.entry) + "  " + f_price(best.stop) + "  " + f_price(best.target), text_color=color.white, text_size=boardSize)
+            table.cell(proBoard, 0, 7, "R/R  |  stop", text_color=color.silver, text_size=boardSize)
+            table.cell(proBoard, 1, 7, (na(best.rr) ? "-" : str.tostring(best.rr, "#.##")) + "R  |  " + (na(atrStop) ? "-" : str.tostring(atrStop, "#.#") + " ATR"), text_color=color.aqua, text_size=boardSize)
+            table.cell(proBoard, 0, 8, "To TP / to SL", text_color=color.silver, text_size=boardSize)
+            table.cell(proBoard, 1, 8, str.tostring(tpDist, format.mintick) + " / " + str.tostring(riskPts, format.mintick), text_color=color.white, text_size=boardSize)
+        else
+            table.cell(proBoard, 0, 4, "Selected setup", text_color=color.silver, text_size=boardSize)
+            table.cell(proBoard, 1, 4, "none - waiting for a graded confirmation", text_color=color.gray, text_size=boardSize)
+        if proShowRsi
+            table.cell(proBoard, 0, 9, "RSI / VWAP / EMA", text_color=color.silver, text_size=boardSize)
+            table.cell(proBoard, 1, 9, str.tostring(rsiVal, "#.#") + "  |  " + f_price(vwapVal) + "  |  " + f_price(emaLongVal), text_color=color.white, text_size=boardSize)</script>
 <script>
 const CODE = document.getElementById('src').textContent;
 const ta  = document.getElementById('code');
