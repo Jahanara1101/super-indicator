@@ -1,0 +1,20 @@
+//@version=5
+indicator("RSI + S/R Channel + EMA200", overlay=false)
+
+rsiLen = 14
+emaLen = 200
+chLen  = 20
+
+rsiVal = ta.rsi(close, rsiLen)
+emaVal = ta.ema(close, emaLen)
+chHi   = ta.highest(high, chLen)
+chLo   = ta.lowest(low, chLen)
+
+plot(rsiVal, "RSI", color=color.purple, linewidth=2)
+hline(70, "Overbought", color=color.new(color.red, 35), linestyle=hline.style_dashed)
+hline(50, "Midline", color=color.new(color.gray, 55), linestyle=hline.style_dotted)
+hline(30, "Oversold", color=color.new(color.green, 35), linestyle=hline.style_dashed)
+
+pEma = plot(emaVal, "EMA 200", color=color.orange, linewidth=2, force_overlay=true)
+pHi  = plot(chHi, "Resistance", color=color.red, linewidth=2, force_overlay=true)
+pLo  = plot(chLo, "Support", color=color.green, linewidth=2, force_overlay=true)

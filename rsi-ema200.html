@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSI + S/R Channel + EMA200 (simple) — Pine v5</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; background:#111; color:#eee;
+         font-family:-apple-system,Roboto,Segoe UI,sans-serif; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  .meta { font-size:12px; color:#888; margin:0 0 12px; }
+  ol { font-size:13px; color:#bbb; margin:0 0 14px; padding-left:20px; line-height:1.6; }
+  ol b { color:#fff; }
+  button { width:100%; padding:20px; font-size:20px; font-weight:700;
+            border:0; border-radius:12px; margin-bottom:10px; color:#fff; }
+  #copy { background:#0a8f3c; }
+  #sel  { background:#2b6cb0; }
+  #msg  { font-size:14px; min-height:22px; margin-bottom:10px; color:#4ade80;
+           font-weight:600; line-height:1.4; }
+  textarea { width:100%; height:38vh; background:#000; color:#9ae6b4;
+              border:1px solid #333; border-radius:10px; padding:10px;
+              font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+              line-height:1.35; white-space:pre; }
+  .foot { font-size:12px; color:#777; margin-top:10px; line-height:1.6; }
+</style>
+</head>
+<body>
+<h1>RSI + S/R Channel + EMA200 (simple) — Pine v5</h1>
+<p class="meta">20 lines &middot; 790 characters &middot; //@version=5</p>
+<ol>
+  <li>Tap <b>COPY</b> below</li>
+  <li>Open TradingView &rarr; <b>Pine Editor</b></li>
+  <li><b>Long-press &rarr; Select all</b>, then <b>backspace</b> so the default
+      template is gone</li>
+  <li><b>Paste</b> &rarr; <b>Save</b> &rarr; <b>Add to chart</b></li>
+</ol>
+<div id="msg"></div>
+<button id="copy">COPY</button>
+<button id="sel">SELECT ALL (fallback)</button>
+<textarea id="code" readonly spellcheck="false"></textarea>
+<p class="foot">If COPY does nothing, tap SELECT ALL, then long-press inside the box
+and choose Copy. The box is read-only so nothing can be changed by accident.</p>
+
+<script type="text/plain" id="src">//@version=5
+indicator("RSI + S/R Channel + EMA200", overlay=false)
+
+rsiLen = 14
+emaLen = 200
+chLen  = 20
+
+rsiVal = ta.rsi(close, rsiLen)
+emaVal = ta.ema(close, emaLen)
+chHi   = ta.highest(high, chLen)
+chLo   = ta.lowest(low, chLen)
+
+plot(rsiVal, "RSI", color=color.purple, linewidth=2)
+hline(70, "Overbought", color=color.new(color.red, 35), linestyle=hline.style_dashed)
+hline(50, "Midline", color=color.new(color.gray, 55), linestyle=hline.style_dotted)
+hline(30, "Oversold", color=color.new(color.green, 35), linestyle=hline.style_dashed)
+
+pEma = plot(emaVal, "EMA 200", color=color.orange, linewidth=2, force_overlay=true)
+pHi  = plot(chHi, "Resistance", color=color.red, linewidth=2, force_overlay=true)
+pLo  = plot(chLo, "Support", color=color.green, linewidth=2, force_overlay=true)</script>
+<script>
+const CODE = document.getElementById('src').textContent;
+const ta  = document.getElementById('code');
+const msg = document.getElementById('msg');
+ta.value = CODE;
+
+function ok(t, c) { msg.style.color = c; msg.textContent = t; }
+
+function legacyCopy() {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  let done = false;
+  try { done = document.execCommand('copy'); } catch (e) { done = false; }
+  return done;
+}
+
+document.getElementById('copy').onclick = async () => {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(CODE);
+      return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+    } catch (e) { /* fall through to the legacy path */ }
+  }
+  if (legacyCopy()) return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+  ok('Copy blocked by the browser \u2014 tap SELECT ALL, then long-press and Copy', '#fbbf24');
+};
+
+document.getElementById('sel').onclick = () => {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  ok('Selected. Long-press the box and choose Copy.', '#4ade80');
+};
+</script>
+</body>
+</html>

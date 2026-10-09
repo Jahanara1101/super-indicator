@@ -128,3 +128,60 @@ to fire that often is exactly what destroys the edge.
 - `make_copy_page.py` — builds the one-tap copy page for a Pine script
 - `tests/check_pine.py` — validates a Pine file against TradingView's compiler
 - `ict_model.pine` — the TradingView port (validated against TradingView's compiler)
+
+---
+
+## RSI + S/R Channels + EMA200 — one indicator, one paste
+
+Three studies in a single script, with no settings to change:
+
+| Study | Where it draws |
+|-------|----------------|
+| RSI (14) | the script's own pane, under the chart (70/50/30 lines) |
+| EMA 200 | main chart, orange line |
+| S/R Channels | main chart, red/green/grey boxes (pivot + strength based) |
+
+**Copy page (one tap):** https://jahanara1101.github.io/super-indicator/rsi-sr-ema200.html
+
+Raw script:
+https://raw.githubusercontent.com/Jahanara1101/super-indicator/main/rsi_sr_channel_ema200.pine
+
+### How one script draws in two places
+
+A Pine script occupies exactly one pane. This one declares `overlay=false`, which
+gives the script its own pane for the RSI, and every price-based drawing is pushed
+onto the main chart with `force_overlay=true`. In v6 that works for `box.new()` as
+well as `plot()`, so the S/R channel keeps its translucent extend-both band on the
+price chart.
+
+Putting all three in one pane would not work: RSI is a 0-100 oscillator and gold is
+around 4200, so on a shared scale the RSI collapses into a flat line at the bottom.
+
+### Settings
+
+Every parameter is a constant and there is no `input()` call, so the Inputs tab is
+empty and nothing can drift between charts:
+
+`prd 10` · `ChannelW 5` · `minstrength 1` · `maxnumsr 5` · `loopback 290` ·
+`RSI 14` · `EMA 200`
+
+TradingView still shows the Style and Visibility tabs for each plot — those cannot
+be removed by any script.
+
+### Verified
+
+Compiled with TradingView's own compiler (`translate_light`): **no errors**,
+0 non-ASCII characters, 0 `input()` calls. The `force_overlay` argument on
+`box.new()` was confirmed to be real by checking that the compiler rejects a bogus
+argument name.
+
+Not verified: on-screen rendering — that needs a logged-in TradingView session.
+
+The S/R channel algorithm is LonesomeTheBlue's "Support Resistance Channels".
+The pasted copy had an indentation bug (`srcol = get_color(...)` dedented out of its
+loop, leaving the following `if` with no block); that is fixed here.
+
+### Simpler alternative
+
+`rsi-ema200.html` — a 20-line version with a plain 20-bar high/low channel instead
+of the pivot/strength algorithm: https://jahanara1101.github.io/super-indicator/rsi-ema200.html
