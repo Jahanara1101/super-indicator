@@ -12,6 +12,9 @@
          padding:13px; margin-bottom:11px; }
  .card h2 { font-size:15px; margin:0 0 4px; }
  .who { font-size:11px; color:#7dd3fc; margin:0 0 7px; }
+ .badge { display:inline-block; font-size:10px; font-weight:700; color:#111;
+          background:#fbbf24; border-radius:6px; padding:3px 7px; margin:0 0 8px;
+          letter-spacing:.3px; }
  .what { font-size:13px; color:#bbb; line-height:1.5; margin:0 0 10px; }
  a.btn { display:block; text-align:center; text-decoration:none; padding:13px;
          border-radius:9px; font-weight:700; font-size:15px; color:#fff;
@@ -21,13 +24,22 @@
  .warn { color:#fbbf24; }
 </style></head><body>
 <h1>Auto-draw indicators — verified</h1>
-<p class="meta">4 scripts &middot; each one compiled on TradingView's own compiler
+<p class="meta">5 scripts &middot; each one compiled on TradingView's own compiler
 with <b>0 errors</b> before being published here.<br>
 Tap <b>COPY</b> on a page &rarr; Pine Editor &rarr; select all &rarr; paste &rarr;
 Add to chart. Or tap the blue button to open the author's page and add it in one click.</p>
 <div class="card">
+<h2>Advanced Pattern Detection [50+] — APDS-N (modified)</h2>
+<p class="who">by Hunk77, reform by Hermes</p>
+<p class="badge">REFORMED · RR≥2 · trend + session + stop gates</p>
+<p class="what">Hunk77&#x27;s detector with three gates in front of every confirmation (trend EMA, session window, minimum stop / ATR) and defaults set to RR&gt;=2, grade A, max 3 patterns. Detection logic untouched. Still a reading tool, not a validated signal.</p>
+<a class="btn" href="apds-n.html">COPY &amp; paste into Pine Editor</a>
+<a class="btn tv" href="https://www.tradingview.com/script/zy8EETop/">Open on TradingView → Add to chart</a>
+</div>
+<div class="card">
 <h2>Auto Trendline Breaks — ADXAE</h2>
 <p class="who">by ADXAE</p>
+
 <p class="what">Swing pivots → validated trendlines (min touches, ATR tolerance, max anchor age) → breakout labels + alerts. Draws, does not signal.</p>
 <a class="btn" href="autotrendlines-breaks.html">COPY &amp; paste into Pine Editor</a>
 <a class="btn tv" href="https://www.tradingview.com/script/AvvB4ZNT-Auto-Trendline-Breaks/">Open on TradingView → Add to chart</a>
@@ -35,6 +47,7 @@ Add to chart. Or tap the blue button to open the author's page and add it in one
 <div class="card">
 <h2>Auto Trend Lines [ZOM] — ZenOutMan</h2>
 <p class="who">by ZenOutMan</p>
+
 <p class="what">Simpler pivot trendlines with proximity filter, touch / breakout alerts and a stats table. Fastest of the three to read.</p>
 <a class="btn" href="autotrendlines-zom.html">COPY &amp; paste into Pine Editor</a>
 <a class="btn tv" href="https://www.tradingview.com/script/EWhIq6NJ-Auto-Trend-Lines-ZOM/">Open on TradingView → Add to chart</a>
@@ -42,6 +55,7 @@ Add to chart. Or tap the blue button to open the author's page and add it in one
 <div class="card">
 <h2>Auto Harmonic Patterns — Trendoscope</h2>
 <p class="who">by Trendoscope (HeWhoMustNotBeNamed)</p>
+
 <p class="what">ZigZag pivots → strict XABCD ratio test → Gartley / Bat / Butterfly / Crab / Shark / Cypher drawn automatically.</p>
 <a class="btn" href="harmonic-patterns.html">COPY &amp; paste into Pine Editor</a>
 <a class="btn tv" href="https://www.tradingview.com/script/f6Ae6av3-Auto-Harmonic-Patterns-Open-Source/">Open on TradingView → Add to chart</a>
@@ -49,6 +63,7 @@ Add to chart. Or tap the blue button to open the author's page and add it in one
 <div class="card">
 <h2>Advanced Pattern Detection [50+] — Hunk77</h2>
 <p class="who">by Hunk77</p>
+
 <p class="what">Double top/bottom, head &amp; shoulders, triangles, wedges, flags — detected on CLOSED bars only. Author states the score is a fit metric, NOT a probability.</p>
 <a class="btn" href="pattern-detection-50.html">COPY &amp; paste into Pine Editor</a>
 <a class="btn tv" href="https://www.tradingview.com/script/zy8EETop/">Open on TradingView → Add to chart</a>
