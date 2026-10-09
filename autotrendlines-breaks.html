@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auto Trendline Breaks — ADXAE</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; background:#111; color:#eee;
+         font-family:-apple-system,Roboto,Segoe UI,sans-serif; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  .meta { font-size:12px; color:#888; margin:0 0 12px; }
+  ol { font-size:13px; color:#bbb; margin:0 0 14px; padding-left:20px; line-height:1.6; }
+  ol b { color:#fff; }
+  button { width:100%; padding:20px; font-size:20px; font-weight:700;
+            border:0; border-radius:12px; margin-bottom:10px; color:#fff; }
+  #copy { background:#0a8f3c; }
+  #sel  { background:#2b6cb0; }
+  #msg  { font-size:14px; min-height:22px; margin-bottom:10px; color:#4ade80;
+           font-weight:600; line-height:1.4; }
+  textarea { width:100%; height:38vh; background:#000; color:#9ae6b4;
+              border:1px solid #333; border-radius:10px; padding:10px;
+              font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+              line-height:1.35; white-space:pre; }
+  .foot { font-size:12px; color:#777; margin-top:10px; line-height:1.6; }
+</style>
+</head>
+<body>
+<h1>Auto Trendline Breaks — ADXAE</h1>
+<p class="meta">586 lines &middot; 22927 characters &middot; // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/</p>
+<ol>
+  <li>Tap <b>COPY</b> below</li>
+  <li>Open TradingView &rarr; <b>Pine Editor</b></li>
+  <li><b>Long-press &rarr; Select all</b>, then <b>backspace</b> so the default
+      template is gone</li>
+  <li><b>Paste</b> &rarr; <b>Save</b> &rarr; <b>Add to chart</b></li>
+</ol>
+<div id="msg"></div>
+<button id="copy">COPY</button>
+<button id="sel">SELECT ALL (fallback)</button>
+<textarea id="code" readonly spellcheck="false"></textarea>
+<p class="foot">If COPY does nothing, tap SELECT ALL, then long-press inside the box
+and choose Copy. The box is read-only so nothing can be changed by accident.</p>
+
+<script type="text/plain" id="src">// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © ADXAE
+
+//@version=6
+indicator("Auto Trendline Breaks",
+     shorttitle="AutoTL Breaks",
+     overlay=true,
+     max_lines_count=500,
+     max_labels_count=500)
+
+// =====================================================================
+// Inputs
+// =====================================================================
+
+var string G1 = "[1] Swing Detection"
+var string G2 = "[2] Line Construction"
+var string G3 = "[3] Display"
+var string G4 = "[4] Breakout Labels"
+var string G5 = "[5] Alerts"
+
+// ---------------------------------------------------------------------
+// Swing Detection
+// ---------------------------------------------------------------------
+
+leftBars = input.int(10, "Pivot Left Bars", minval=2, group=G1,
+     tooltip="Bars to the left of a candle that must be lower/higher for a swing to be confirmed.")
+
+rightBars = input.int(10, "Pivot Right Bars", minval=2, group=G1,
+     tooltip="Bars to the right needed to confirm the swing. This creates a confirmation delay and avoids using unconfirmed pivots.")
+
+anchorMode = input.string("Wicks (High/Low)", "Anchor Source",
+     options=["Wicks (High/Low)", "Closes"],
+     group=G1,
+     tooltip="Wicks use highs/lows. Closes use closing prices for cleaner close-based trendlines.")
+
+// ---------------------------------------------------------------------
+// Line Construction
+// ---------------------------------------------------------------------
+
+maxScan = input.int(8, "Pivots Scanned Per Side", minval=2, maxval=20, group=G2,
+     tooltip="How many recent peaks/troughs are considered when building a new trendline.")
+
+tolMult = input.float(0.25, "Tolerance (ATR multiple)", minval=0.0, step=0.05, group=G2,
+     tooltip="Allowed pierce/touch distance as an ATR multiple.")
+
+atrLen = input.int(14, "ATR Length", minval=1, group=G2)
+
+dirMode = input.string("Classic only", "Allowed Line Direction",
+     options=["Classic only", "Any slope"],
+     group=G2,
+     tooltip="Classic only: falling resistance and rising support. Any slope allows all valid lines.")
+
+minTouches = input.int(3, "Minimum Touches", minval=2, maxval=6, group=G2,
+     tooltip="Minimum number of touches required before drawing a line.")
+
+maxAge = input.int(500, "Max Anchor Age (bars)", minval=50, group=G2,
+     tooltip="Old pivots beyond this age are not used as anchors.")
+
+retireMult = input.float(10.0, "Retire Line Beyond (ATR multiple)", minval=0.0, step=0.5, group=G2,
+     tooltip="Active lines too far from price are retired visually. This does not fire a break alert.")
+
+// ---------------------------------------------------------------------
+// Display
+// ---------------------------------------------------------------------
+
+maxKeep = input.int(4, "Max Lines Per Side", minval=1, maxval=20, group=G3,
+     tooltip="Maximum number of active/broken lines kept per side.")
+
+lineProjectionMode = input.string("Extend Right", "Line Projection Mode",
+     options=["Extend Right", "Limited Projection"],
+     group=G3,
+     tooltip="Extend Right keeps active lines extending. Limited Projection visually limits future projection.")
+
+projectionBars = input.int(120, "Limited Projection Bars", minval=20, maxval=500, group=G3,
+     tooltip="Used only when Line Projection Mode is set to Limited Projection.")
+
+showActiveLines = input.bool(true, "Show Active Lines", group=G3,
+     tooltip="If disabled, active trendlines are hidden. Break labels can also be restricted to visible active lines.")
+
+keepBroken = input.bool(true, "Keep Broken Lines", group=G3,
+     tooltip="If enabled, broken lines stay on the chart after a breakout.")
+
+showExpiredLines = input.bool(false, "Show Expired Lines", group=G3,
+     tooltip="If enabled, retired lines stay visible. If disabled, they are hidden.")
+
+lineWidth = input.int(2, "Active Line Width", minval=1, maxval=5, group=G3)
+
+brokenLineWidth = input.int(2, "Broken / Expired Line Width", minval=1, maxval=5, group=G3)
+
+brokenLineStyle = input.string("Dashed", "Broken Line Style",
+     options=["Solid", "Dashed", "Dotted"],
+     group=G3,
+     tooltip="Controls the style of lines after they are broken.")
+
+expiredLineStyle = input.string("Dotted", "Expired Line Style",
+     options=["Solid", "Dashed", "Dotted"],
+     group=G3,
+     tooltip="Controls the style of retired/expired lines.")
+
+resColor = input.color(color.red, "Resistance Trendline Color", group=G3)
+supColor = input.color(color.green, "Support Trendline Color", group=G3)
+
+activeTransparency = input.int(0, "Active Line Transparency", minval=0, maxval=90, group=G3,
+     tooltip="Lower value = more visible. 0 is fully visible.")
+
+brokenTransparency = input.int(35, "Broken Line Transparency", minval=0, maxval=100, group=G3,
+     tooltip="Lower value = stronger broken trendlines. Recommended: 25 to 45.")
+
+expiredTransparency = input.int(65, "Expired Line Transparency", minval=0, maxval=100, group=G3,
+     tooltip="Lower value = stronger expired lines. Recommended: 55 to 75.")
+
+markPivots = input.bool(true, "Mark Swing Points", group=G3)
+
+pivotMarkerSize = input.string("Tiny", "Pivot Marker Size",
+     options=["Tiny", "Small", "Normal"],
+     group=G3,
+     active=markPivots)
+
+pivotHiColor = input.color(color.new(color.red, 25), "Peak Marker Color", group=G3, active=markPivots)
+pivotLoColor = input.color(color.new(color.green, 25), "Trough Marker Color", group=G3, active=markPivots)
+
+// ---------------------------------------------------------------------
+// Breakout Labels
+// ---------------------------------------------------------------------
+
+showBreakLabels = input.bool(true, "Show BREAK Labels", group=G4)
+
+breakLabelTextMode = input.string("Compact", "BREAK Label Text",
+     options=["Compact", "Full"],
+     group=G4,
+     active=showBreakLabels,
+     tooltip="Compact uses BRK R / BRK S. Full uses BREAK R / BREAK S.")
+
+breakLabelSize = input.string("Small", "Break Label Size",
+     options=["Tiny", "Small", "Normal", "Large", "Huge"],
+     group=G4,
+     active=showBreakLabels)
+
+breakLabelStyleMode = input.string("Arrow Label", "Break Label Style",
+     options=["Arrow Label", "Simple Label"],
+     group=G4,
+     active=showBreakLabels,
+     tooltip="Arrow Label uses directional labels. Simple Label uses cleaner flat labels.")
+
+placeBreakAtLine = input.bool(true, "Place BREAK Label At Broken Line", group=G4,
+     tooltip="If enabled, the break label is placed near the exact trendline price that was broken.")
+
+breakLineOffsetAtr = input.float(0.20, "BREAK Label Offset From Broken Line", minval=0.0, step=0.05, group=G4,
+     tooltip="ATR-based distance from the broken line. Used when labels are placed at the broken line.")
+
+minLabelGapAtr = input.float(1.20, "Minimum BREAK Label Gap From Candle", minval=0.0, step=0.05, group=G4,
+     tooltip="Minimum ATR-based distance between the BREAK label and the candle. This prevents labels from touching or entering candles.")
+
+fallbackLabelOffsetAtr = input.float(1.40, "Fallback BREAK Label Distance from Candle", minval=0.0, step=0.05, group=G4,
+     tooltip="Fallback ATR distance from candle if label placement at the broken line is disabled.")
+
+breakLabelXOffset = input.int(0, "BREAK Label Horizontal Offset Bars", minval=0, maxval=10, group=G4,
+     tooltip="Moves BREAK labels to the right. Default is 0 so labels stay on the actual break candle.")
+
+labelOnlyVisibleActiveLines = input.bool(true, "Only Label Visible Active Lines", group=G4,
+     tooltip="If enabled, a BREAK label is printed only when the broken line was an active visible line.")
+
+minBarsBetweenResBreakLabels = input.int(0, "Minimum Bars Between BRK R Labels", minval=0, maxval=50, group=G4,
+     tooltip="Prevents printing too many resistance-break labels close together. Use 0 to disable.")
+
+minBarsBetweenSupBreakLabels = input.int(0, "Minimum Bars Between BRK S Labels", minval=0, maxval=50, group=G4,
+     tooltip="Prevents printing too many support-break labels close together. Use 0 to disable.")
+
+breakUpColor = input.color(color.green, "BRK R Color - Resistance Broken Up", group=G4,
+     tooltip="Color used when price closes above a resistance trendline. This is a resistance-break event, not a buy signal.")
+
+breakDownColor = input.color(color.red, "BRK S Color - Support Broken Down", group=G4,
+     tooltip="Color used when price closes below a support trendline. This is a support-break event, not a sell signal.")
+
+breakLabelTransparency = input.int(0, "BREAK Label Transparency", minval=0, maxval=80, group=G4)
+
+breakLabelTextColor = input.color(color.white, "BREAK Label Text Color", group=G4)
+
+// ---------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------
+
+enableAlerts = input.bool(true, "Enable Alerts", group=G5)
+
+// =====================================================================
+// Buffers
+// =====================================================================
+
+var array<float> bufHi = array.new_float()
+var array<float> bufLo = array.new_float()
+
+srcHi = anchorMode == "Closes" ? close : high
+srcLo = anchorMode == "Closes" ? close : low
+
+array.push(bufHi, srcHi)
+array.push(bufLo, srcLo)
+
+// =====================================================================
+// Confirmed Pivot Storage
+// =====================================================================
+
+var array<int>   phX = array.new_int()
+var array<float> phY = array.new_float()
+var array<int>   plX = array.new_int()
+var array<float> plY = array.new_float()
+
+// =====================================================================
+// Trendline Storage
+// =====================================================================
+
+var array<line> resLines = array.new_line()
+var array<bool> resBrk   = array.new_bool()
+var array<line> supLines = array.new_line()
+var array<bool> supBrk   = array.new_bool()
+
+atrNow = ta.atr(atrLen)
+tol = atrNow * tolMult
+
+var int lastResBreakLabelBar = na
+var int lastSupBreakLabelBar = na
+
+// =====================================================================
+// Helper Functions
+// =====================================================================
+
+f_lineExtendMode() =>
+    lineProjectionMode == "Extend Right" ? extend.right : extend.none
+
+f_lineX2(int pivotBar) =>
+    lineProjectionMode == "Extend Right" ? pivotBar : pivotBar + projectionBars
+
+f_lineStyle(string styleName) =>
+    styleName == "Solid" ? line.style_solid :
+     styleName == "Dashed" ? line.style_dashed :
+     line.style_dotted
+
+f_labelSize() =>
+    breakLabelSize == "Tiny" ? size.tiny :
+     breakLabelSize == "Small" ? size.small :
+     breakLabelSize == "Normal" ? size.normal :
+     breakLabelSize == "Large" ? size.large :
+     size.huge
+
+f_resBreakText() =>
+    breakLabelTextMode == "Compact" ? "BRK R" : "BREAK R"
+
+f_supBreakText() =>
+    breakLabelTextMode == "Compact" ? "BRK S" : "BREAK S"
+
+f_resLabelStyle() =>
+    breakLabelStyleMode == "Arrow Label" ? label.style_label_up : label.style_label_left
+
+f_supLabelStyle() =>
+    breakLabelStyleMode == "Arrow Label" ? label.style_label_down : label.style_label_left
+
+// =====================================================================
+// Line Validation
+// =====================================================================
+
+f_validate(bool isRes, int xA, float yA, int xB, float yB, float tolerance) =>
+    slope = (yB - yA) / (xB - xA)
+    ok = true
+    touches = 0
+
+    for x = xA to bar_index
+        lineY = yA + slope * (x - xA)
+        px = isRes ? array.get(bufHi, x) : array.get(bufLo, x)
+        diff = isRes ? px - lineY : lineY - px
+
+        if diff > tolerance
+            ok := false
+            break
+
+        if math.abs(diff) <= tolerance
+            touches += 1
+
+    [ok, touches]
+
+// =====================================================================
+// Build Trendlines
+// =====================================================================
+
+f_buildLine(bool isRes, array<int> pxArr, array<float> pyArr, int pb, float pp,
+             array<line> lines, array<bool> brks, color col) =>
+    n = array.size(pxArr)
+    bestX = -1
+    bestY = float(na)
+    bestT = 0
+
+    if n >= 2
+        for k = 0 to n - 2
+            xA = array.get(pxArr, k)
+            yA = array.get(pyArr, k)
+
+            if bar_index - xA <= maxAge
+                slope = (pp - yA) / (pb - xA)
+                dirOk = dirMode == "Any slope" or (isRes ? slope <= 0 : slope >= 0)
+
+                if dirOk
+                    [ok, t] = f_validate(isRes, xA, yA, pb, pp, tol)
+
+                    if ok and t >= bestT
+                        bestX := xA
+                        bestY := yA
+                        bestT := t
+
+    created = false
+
+    if bestX >= 0 and bestT >= minTouches
+        x2 = f_lineX2(pb)
+
+        ln = line.new(
+             bestX,
+             bestY,
+             x2,
+             pp,
+             xloc=xloc.bar_index,
+             extend=showActiveLines ? f_lineExtendMode() : extend.none,
+             color=showActiveLines ? color.new(col, activeTransparency) : color.new(col, 100),
+             width=lineWidth,
+             style=line.style_solid)
+
+        array.push(lines, ln)
+        array.push(brks, false)
+        created := true
+
+        if array.size(lines) > maxKeep
+            line.delete(array.shift(lines))
+            array.shift(brks)
+
+    created
+
+// =====================================================================
+// Break Detection
+// =====================================================================
+
+f_checkBreaks(bool isRes, array<line> lines, array<bool> brks, color col) =>
+    brokeNow = false
+    brokenPrice = float(na)
+    bestDistance = float(na)
+
+    if array.size(lines) > 0
+        for i = 0 to array.size(lines) - 1
+            if not array.get(brks, i)
+                ln = array.get(lines, i)
+                lp = line.get_price(ln, bar_index)
+                lpPrev = line.get_price(ln, bar_index - 1)
+
+                lineVisibleForLabel = showActiveLines or not labelOnlyVisibleActiveLines
+
+                crossedUp = close > lp and close[1] <= lpPrev
+                crossedDn = close < lp and close[1] >= lpPrev
+                crossed = isRes ? crossedUp : crossedDn
+
+                if crossed
+                    array.set(brks, i, true)
+                    brokeNow := true
+
+                    distance = math.abs(close - lp)
+
+                    if lineVisibleForLabel and (na(bestDistance) or distance < bestDistance)
+                        bestDistance := distance
+                        brokenPrice := lp
+
+                    if keepBroken
+                        line.set_extend(ln, extend.none)
+                        line.set_x2(ln, bar_index)
+                        line.set_y2(ln, lp)
+                        line.set_style(ln, f_lineStyle(brokenLineStyle))
+                        line.set_width(ln, brokenLineWidth)
+                        line.set_color(ln, color.new(col, brokenTransparency))
+                    else
+                        line.set_extend(ln, extend.none)
+                        line.set_x2(ln, bar_index)
+                        line.set_y2(ln, lp)
+                        line.set_color(ln, color.new(col, 100))
+
+    [brokeNow, brokenPrice]
+
+// =====================================================================
+// Retire Lines
+// =====================================================================
+
+f_retire(bool isRes, array<line> lines, array<bool> brks, color col) =>
+    retired = 0
+
+    if array.size(lines) > 0
+        for i = 0 to array.size(lines) - 1
+            if not array.get(brks, i)
+                ln = array.get(lines, i)
+                lp = line.get_price(ln, bar_index)
+
+                faraway = retireMult > 0 and math.abs(close - lp) > retireMult * atrNow
+                subZero = not isRes and lp <= 0
+
+                if faraway or subZero
+                    array.set(brks, i, true)
+                    line.set_extend(ln, extend.none)
+                    line.set_x2(ln, bar_index)
+                    line.set_y2(ln, lp)
+                    line.set_style(ln, f_lineStyle(expiredLineStyle))
+                    line.set_width(ln, brokenLineWidth)
+                    line.set_color(ln, showExpiredLines ? color.new(col, expiredTransparency) : color.new(col, 100))
+                    retired += 1
+
+    retired
+
+// =====================================================================
+// Refresh Active Lines
+// =====================================================================
+
+f_refreshActive(array<line> lines, array<bool> brks, color col) =>
+    if array.size(lines) > 0
+        for i = 0 to array.size(lines) - 1
+            if not array.get(brks, i)
+                ln = array.get(lines, i)
+                line.set_color(ln, showActiveLines ? color.new(col, activeTransparency) : color.new(col, 100))
+                line.set_width(ln, lineWidth)
+                line.set_style(ln, line.style_solid)
+                line.set_extend(ln, showActiveLines ? f_lineExtendMode() : extend.none)
+
+// =====================================================================
+// Pivot Flow
+// =====================================================================
+
+ph = ta.pivothigh(srcHi, leftBars, rightBars)
+pl = ta.pivotlow(srcLo, leftBars, rightBars)
+
+newResLine = false
+newSupLine = false
+
+if not na(ph) and not na(tol)
+    pb = bar_index - rightBars
+    array.push(phX, pb)
+    array.push(phY, ph)
+
+    while array.size(phX) > maxScan + 1
+        array.shift(phX)
+        array.shift(phY)
+
+    newResLine := f_buildLine(true, phX, phY, pb, ph, resLines, resBrk, resColor)
+
+if not na(pl) and not na(tol)
+    pbl = bar_index - rightBars
+    array.push(plX, pbl)
+    array.push(plY, pl)
+
+    while array.size(plX) > maxScan + 1
+        array.shift(plX)
+        array.shift(plY)
+
+    newSupLine := f_buildLine(false, plX, plY, pbl, pl, supLines, supBrk, supColor)
+
+// =====================================================================
+// Breaks and Retirements
+// =====================================================================
+
+f_refreshActive(resLines, resBrk, resColor)
+f_refreshActive(supLines, supBrk, supColor)
+
+[resBreak, resBrokenPrice] = f_checkBreaks(true, resLines, resBrk, resColor)
+[supBreak, supBrokenPrice] = f_checkBreaks(false, supLines, supBrk, supColor)
+
+retiredRes = f_retire(true, resLines, resBrk, resColor)
+retiredSup = f_retire(false, supLines, supBrk, supColor)
+
+// =====================================================================
+// Smart Break Label Placement
+// =====================================================================
+
+labelSz = f_labelSize()
+breakLabelX = bar_index + breakLabelXOffset
+
+fallbackResLabelY = low - atrNow * fallbackLabelOffsetAtr
+fallbackSupLabelY = high + atrNow * fallbackLabelOffsetAtr
+
+resLineBasedY = not na(resBrokenPrice) ? resBrokenPrice - atrNow * breakLineOffsetAtr : fallbackResLabelY
+supLineBasedY = not na(supBrokenPrice) ? supBrokenPrice + atrNow * breakLineOffsetAtr : fallbackSupLabelY
+
+minResAwayFromCandle = low - atrNow * minLabelGapAtr
+minSupAwayFromCandle = high + atrNow * minLabelGapAtr
+
+resLabelY = placeBreakAtLine and not na(resBrokenPrice) ? math.min(resLineBasedY, minResAwayFromCandle) : fallbackResLabelY
+supLabelY = placeBreakAtLine and not na(supBrokenPrice) ? math.max(supLineBasedY, minSupAwayFromCandle) : fallbackSupLabelY
+
+canPrintResBreakLabel = minBarsBetweenResBreakLabels == 0 or na(lastResBreakLabelBar) or bar_index - lastResBreakLabelBar >= minBarsBetweenResBreakLabels
+canPrintSupBreakLabel = minBarsBetweenSupBreakLabels == 0 or na(lastSupBreakLabelBar) or bar_index - lastSupBreakLabelBar >= minBarsBetweenSupBreakLabels
+
+if showBreakLabels and resBreak and not na(resBrokenPrice) and canPrintResBreakLabel
+    label.new(
+         breakLabelX,
+         resLabelY,
+         f_resBreakText(),
+         xloc=xloc.bar_index,
+         style=f_resLabelStyle(),
+         color=color.new(breakUpColor, breakLabelTransparency),
+         textcolor=breakLabelTextColor,
+         size=labelSz)
+    lastResBreakLabelBar := bar_index
+
+if showBreakLabels and supBreak and not na(supBrokenPrice) and canPrintSupBreakLabel
+    label.new(
+         breakLabelX,
+         supLabelY,
+         f_supBreakText(),
+         xloc=xloc.bar_index,
+         style=f_supLabelStyle(),
+         color=color.new(breakDownColor, breakLabelTransparency),
+         textcolor=breakLabelTextColor,
+         size=labelSz)
+    lastSupBreakLabelBar := bar_index
+
+// =====================================================================
+// Pivot Markers
+// =====================================================================
+
+// Pivot markers - Tiny
+plotshape(markPivots and pivotMarkerSize == "Tiny" and not na(ph),
+     title="Confirmed Peak Tiny",
+     style=shape.triangledown,
+     location=location.abovebar,
+     color=pivotHiColor,
+     size=size.tiny,
+     offset=-rightBars)
+
+plotshape(markPivots and pivotMarkerSize == "Tiny" and not na(pl),
+     title="Confirmed Trough Tiny",
+     style=shape.triangleup,
+     location=location.belowbar,
+     color=pivotLoColor,
+     size=size.tiny,
+     offset=-rightBars)
+
+// Pivot markers - Small
+plotshape(markPivots and pivotMarkerSize == "Small" and not na(ph),
+     title="Confirmed Peak Small",
+     style=shape.triangledown,
+     location=location.abovebar,
+     color=pivotHiColor,
+     size=size.small,
+     offset=-rightBars)
+
+plotshape(markPivots and pivotMarkerSize == "Small" and not na(pl),
+     title="Confirmed Trough Small",
+     style=shape.triangleup,
+     location=location.belowbar,
+     color=pivotLoColor,
+     size=size.small,
+     offset=-rightBars)
+
+// Pivot markers - Normal
+plotshape(markPivots and pivotMarkerSize == "Normal" and not na(ph),
+     title="Confirmed Peak Normal",
+     style=shape.triangledown,
+     location=location.abovebar,
+     color=pivotHiColor,
+     size=size.normal,
+     offset=-rightBars)
+
+plotshape(markPivots and pivotMarkerSize == "Normal" and not na(pl),
+     title="Confirmed Trough Normal",
+     style=shape.triangleup,
+     location=location.belowbar,
+     color=pivotLoColor,
+     size=size.normal,
+     offset=-rightBars)
+
+// =====================================================================
+// Alerts
+// =====================================================================
+
+alertcondition(enableAlerts and resBreak,
+     title="Resistance Trendline Broken",
+     message="Price closed ABOVE a resistance trendline.")
+
+alertcondition(enableAlerts and supBreak,
+     title="Support Trendline Broken",
+     message="Price closed BELOW a support trendline.")
+
+alertcondition(enableAlerts and newResLine,
+     title="New Resistance Trendline",
+     message="A new resistance trendline was confirmed and drawn.")
+
+alertcondition(enableAlerts and newSupLine,
+     title="New Support Trendline",
+     message="A new support trendline was confirmed and drawn.")</script>
+<script>
+const CODE = document.getElementById('src').textContent;
+const ta  = document.getElementById('code');
+const msg = document.getElementById('msg');
+ta.value = CODE;
+
+function ok(t, c) { msg.style.color = c; msg.textContent = t; }
+
+function legacyCopy() {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  let done = false;
+  try { done = document.execCommand('copy'); } catch (e) { done = false; }
+  return done;
+}
+
+document.getElementById('copy').onclick = async () => {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(CODE);
+      return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+    } catch (e) { /* fall through to the legacy path */ }
+  }
+  if (legacyCopy()) return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+  ok('Copy blocked by the browser \u2014 tap SELECT ALL, then long-press and Copy', '#fbbf24');
+};
+
+document.getElementById('sel').onclick = () => {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  ok('Selected. Long-press the box and choose Copy.', '#4ade80');
+};
+</script>
+</body>
+</html>

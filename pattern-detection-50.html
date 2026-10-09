@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Advanced Pattern Detection [50+] — Hunk77</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; background:#111; color:#eee;
+         font-family:-apple-system,Roboto,Segoe UI,sans-serif; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  .meta { font-size:12px; color:#888; margin:0 0 12px; }
+  ol { font-size:13px; color:#bbb; margin:0 0 14px; padding-left:20px; line-height:1.6; }
+  ol b { color:#fff; }
+  button { width:100%; padding:20px; font-size:20px; font-weight:700;
+            border:0; border-radius:12px; margin-bottom:10px; color:#fff; }
+  #copy { background:#0a8f3c; }
+  #sel  { background:#2b6cb0; }
+  #msg  { font-size:14px; min-height:22px; margin-bottom:10px; color:#4ade80;
+           font-weight:600; line-height:1.4; }
+  textarea { width:100%; height:38vh; background:#000; color:#9ae6b4;
+              border:1px solid #333; border-radius:10px; padding:10px;
+              font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+              line-height:1.35; white-space:pre; }
+  .foot { font-size:12px; color:#777; margin-top:10px; line-height:1.6; }
+</style>
+</head>
+<body>
+<h1>Advanced Pattern Detection [50+] — Hunk77</h1>
+<p class="meta">1593 lines &middot; 110136 characters &middot; //@version=6</p>
+<ol>
+  <li>Tap <b>COPY</b> below</li>
+  <li>Open TradingView &rarr; <b>Pine Editor</b></li>
+  <li><b>Long-press &rarr; Select all</b>, then <b>backspace</b> so the default
+      template is gone</li>
+  <li><b>Paste</b> &rarr; <b>Save</b> &rarr; <b>Add to chart</b></li>
+</ol>
+<div id="msg"></div>
+<button id="copy">COPY</button>
+<button id="sel">SELECT ALL (fallback)</button>
+<textarea id="code" readonly spellcheck="false"></textarea>
+<p class="foot">If COPY does nothing, tap SELECT ALL, then long-press inside the box
+and choose Copy. The box is read-only so nothing can be changed by accident.</p>
+
+<script type="text/plain" id="src">//@version=6
+indicator("Advanced Pattern Detection System v2", shorttitle="APDS 2.1.3", overlay=true, max_bars_back=1200, max_lines_count=450, max_labels_count=500)
+
+// Rebuild of the user's Advanced Pattern Detection System.
+// Detection and lifecycle updates run on CLOSED chart bars only.
+// Shape score is a deterministic fit metric, NOT a probability or a backtest.
+// Frozen pattern snapshots never borrow a future/replaced swing.
+// v2.1.1: fix recognition-label coordinates for sloped patterns; frozen evidence grades, one representative per direction/bar, TP/SL labels.
+// v2.1.3: four-layer visual hierarchy; compact exits; WATCH hidden by default; split formation/projection boundaries; selected-signal-first TP/SL/REF.
+// Evidence grade is a hand-designed SETUP score; it is NOT a success probability.
+// Exits are pattern-linked barrier observations at BAR CLOSE, not broker orders/fills.
+// See README_JA.md and VALIDATION_JA.md for limitations and unperformed native checks.
+
+// ============================================================================
+// 1. SETTINGS
+// ============================================================================
+g1 = "01 | Structure / 構造"
+lookback = input.int(160, "Maximum structure span (bars)", minval=40, maxval=500, group=g1, display=display.data_window)
+pivotLen = input.int(4, "Pivot confirmation: left AND right bars", minval=2, maxval=20, group=g1, display=display.data_window)
+minSwingATR = input.float(0.5, "Minimum alternating swing / ATR", minval=0.0, maxval=5.0, step=0.1, group=g1, display=display.data_window)
+minPivotGap = input.int(2, "Minimum bars between alternating pivots", minval=1, maxval=20, group=g1, display=display.data_window)
+atrLength = input.int(14, "ATR length", minval=2, maxval=100, group=g1, display=display.data_window)
+levelTolATR = input.float(0.4, "Equal-level tolerance / ATR", minval=0.05, maxval=2.0, step=0.05, group=g1, display=display.data_window)
+minHeightATR = input.float(1.5, "Minimum chart-pattern height / ATR", minval=0.2, maxval=10.0, step=0.1, group=g1, display=display.data_window)
+min_touches = input.int(2, "Triangle / channel touches PER SIDE", minval=2, maxval=5, group=g1, display=display.data_window)
+fitTolATR = input.float(0.6, "Maximum boundary-fit error / ATR", minval=0.1, maxval=2.0, step=0.1, group=g1, display=display.data_window)
+flatMoveATR = input.float(0.5, "Flat boundary: total change / ATR", minval=0.05, maxval=2.0, step=0.05, group=g1, display=display.data_window)
+maxTimeRatio = input.float(3.0, "Maximum left/right duration ratio", minval=1.2, maxval=6.0, step=0.1, group=g1, display=display.data_window)
+minScore = input.float(50.0, "Minimum shape score (not win rate)", minval=0.0, maxval=95.0, step=1.0, group=g1, display=display.data_window)
+
+classicGroup = "02 | Classic patterns"
+detect_classic = input.bool(true, "Enable classic patterns", group=classicGroup, display=display.data_window)
+classic_double = input.bool(true, "Double Top / Bottom", group=classicGroup, display=display.data_window)
+classic_triple = input.bool(true, "Triple Top / Bottom", group=classicGroup, display=display.data_window)
+classic_hs = input.bool(true, "Head & Shoulders / Inverse / Complex", group=classicGroup, display=display.data_window)
+classic_rounding = input.bool(true, "Rounding Top / Bottom (sampled-curve rules)", group=classicGroup, display=display.data_window)
+roundLength = input.int(60, "Rounding window", minval=20, maxval=200, group=classicGroup, display=display.data_window)
+curveMaxError = input.float(0.20, "Curve RMS error / fitted depth", minval=0.05, maxval=0.4, step=0.01, group=classicGroup, display=display.data_window)
+
+g3 = "03 | Triangles"
+detect_triangles = input.bool(true, "Enable triangles", group=g3, display=display.data_window)
+tri_ascending = input.bool(true, "Ascending Triangle", group=g3, display=display.data_window)
+tri_descending = input.bool(true, "Descending Triangle", group=g3, display=display.data_window)
+tri_symmetrical = input.bool(true, "Symmetrical Triangle", group=g3, display=display.data_window)
+tri_expanding = input.bool(true, "Expanding Triangle", group=g3, display=display.data_window)
+
+g4 = "04 | Continuation / boundaries"
+detect_continuation = input.bool(true, "Enable continuation patterns", group=g4, display=display.data_window)
+cont_flag = input.bool(true, "Bull / Bear / Horizontal Flags", group=g4, display=display.data_window)
+cont_pennant = input.bool(true, "Bull / Bear Pennants", group=g4, display=display.data_window)
+cont_wedge = input.bool(true, "Rising / Falling / Broadening Wedges", group=g4, display=display.data_window)
+cont_channel = input.bool(true, "Ascending / Descending / Horizontal Channels", group=g4, display=display.data_window)
+cont_rectangle = input.bool(true, "Rectangles", group=g4, display=display.data_window)
+poleMinATR = input.float(3.0, "Minimum flagpole height / ATR", minval=1.0, maxval=12.0, step=0.25, group=g4, display=display.data_window)
+
+g5 = "05 | Harmonic ratio templates"
+detect_harmonic = input.bool(true, "Enable harmonic templates", group=g5, display=display.data_window)
+harm_gartley = input.bool(true, "Gartley", group=g5, display=display.data_window)
+harm_butterfly = input.bool(true, "Butterfly", group=g5, display=display.data_window)
+harm_bat = input.bool(true, "Bat", group=g5, display=display.data_window)
+harm_crab = input.bool(true, "Crab", group=g5, display=display.data_window)
+harm_shark = input.bool(true, "Shark (O-X-A-B-C)", group=g5, display=display.data_window)
+harm_cypher = input.bool(true, "Cypher", group=g5, display=display.data_window)
+fibTolerance = input.float(0.04, "Fib tolerance: absolute RATIO units", minval=0.005, maxval=0.10, step=0.005, group=g5, display=display.data_window)
+reversalATR = input.float(0.5, "Post-D close confirmation / ATR", minval=0.1, maxval=3.0, step=0.1, group=g5, display=display.data_window)
+
+g6 = "06 | Price action"
+detect_price_action = input.bool(true, "Enable price action", group=g6, display=display.data_window)
+pa_pin_bar = input.bool(true, "Lower- / Upper-Wick Pin Bar (range break)", group=g6, display=display.data_window)
+pa_inside = input.bool(true, "Inside Bar", group=g6, display=display.data_window)
+pa_outside = input.bool(true, "Outside Bar", group=g6, display=display.data_window)
+pa_engulfing = input.bool(true, "Bullish / Bearish Engulfing (real bodies)", group=g6, display=display.data_window)
+pa_doji = input.bool(true, "Doji / Dragonfly / Gravestone", group=g6, display=display.data_window)
+pa_hammer = input.bool(true, "Hammer / Hanging Man / Inverted / Shooting Star", group=g6, display=display.data_window)
+contextLength = input.int(10, "Prior trend context (bars)", minval=3, maxval=50, group=g6, display=display.data_window)
+minCandleATR = input.float(0.35, "Minimum candle range / ATR", minval=0.05, maxval=2.0, step=0.05, group=g6, display=display.data_window)
+
+g7 = "07 | Special patterns (explicit heuristic rules)"
+detect_special = input.bool(true, "Enable special patterns", group=g7, display=display.data_window)
+spec_diamond = input.bool(true, "Diamond", group=g7, display=display.data_window)
+spec_cup = input.bool(true, "Cup & Handle / Inverse", group=g7, display=display.data_window)
+spec_vbottom = input.bool(true, "V-Bottom / V-Top", group=g7, display=display.data_window)
+spec_broadening = input.bool(true, "Broadening formation (triangle alias)", group=g7, display=display.data_window)
+spec_island = input.bool(true, "Island Reversal (1-5 island bars)", group=g7, display=display.data_window)
+minCupBars = input.int(20, "Minimum cup duration", minval=10, maxval=100, group=g7, display=display.data_window)
+islandGapATR = input.float(0.10, "Minimum true island gap / ATR", minval=0.0, maxval=2.0, step=0.05, group=g7, display=display.data_window)
+
+g8 = "08 | Confirmation / lifecycle"
+breakBufferATR = input.float(0.10, "Close-break buffer / formation ATR", minval=0.0, maxval=1.0, step=0.05, group=g8, display=display.data_window)
+stopPadATR = input.float(0.25, "Invalidation padding / formation ATR", minval=0.05, maxval=2.0, step=0.05, group=g8, display=display.data_window)
+pendingBars = input.int(40, "Pending structure expiry (bars)", minval=3, maxval=200, group=g8, display=display.data_window)
+trackingBars = input.int(100, "Post-confirmation tracking expiry (bars)", minval=5, maxval=500, group=g8, display=display.data_window)
+minRR = input.float(0.0, "Minimum reference reward/risk at confirmation", minval=0.0, maxval=5.0, step=0.1, group=g8, display=display.data_window)
+volumeFilter = input.bool(false, "Require relative volume at breakout (missing volume fails)", group=g8, display=display.data_window)
+volumeMultiple = input.float(1.2, "Breakout volume / previous 20-bar mean", minval=0.5, maxval=5.0, step=0.1, group=g8, display=display.data_window)
+suppressOverlap = input.bool(true, "Suppress overlapping LIVE structures with same name", group=g8, display=display.data_window)
+registryLimit = input.int(160, "Tracked snapshot capacity (active records never evicted)", minval=40, maxval=250, group=g8, display=display.data_window)
+
+g9 = "09 | Display / visual hierarchy"
+show_patterns = input.bool(true, "Draw detected structure vertices", group=g9, display=display.data_window)
+show_pattern_labels = input.bool(false, "Show pattern recognition labels", tooltip="Off by default: pattern labels are diagnostic context, while selected LONG/SHORT signals remain the primary chart layer.", group=g9, display=display.data_window)
+show_confidence = input.bool(true, "Show shape SCORE / 100 (not probability)", group=g9, display=display.data_window)
+show_table = input.bool(true, "Show detection table", group=g9, display=display.data_window)
+show_explanation = input.bool(true, "Show evidence panel", group=g9, display=display.data_window)
+show_pivot_points = input.bool(false, "Show raw CONFIRMED pivots at their original bars", tooltip="A marker appears pivot-right bars later. This is not its detection time. Pattern signal arrows remain at the recognition bar.", group=g9, display=display.data_window)
+show_key_levels = input.bool(true, "Show formation boundaries + short projection", group=g9, display=display.data_window)
+show_targets = input.bool(true, "Show selected TP / SL / reference-close levels", group=g9, display=display.data_window)
+show_observation_targets = input.bool(false, "Also show TP / SL for unselected observations", tooltip="Off by default to prevent non-selected setups from competing visually with actual selected signals.", group=g9, display=display.data_window)
+show_history = input.bool(false, "Include finished snapshots in the latest display", group=g9, display=display.data_window)
+show_signals = input.bool(true, "Show graded confirmation markers (bounded history)", group=g9, display=display.data_window)
+max_patterns = input.int(5, "Maximum displayed patterns", minval=1, maxval=10, group=g9, display=display.data_window)
+reason_limit = input.int(2, "Maximum evidence-panel rows", minval=1, maxval=5, group=g9, display=display.data_window)
+projectionBars = input.int(12, "Boundary projection beyond latest bar", minval=1, maxval=100, tooltip="Only the post-formation projection is dashed. Historical formation boundaries stay inside the observed structure.", group=g9, display=display.data_window)
+patternLabelOffsetATR = input.float(0.12, "Pattern-label base offset / ATR", minval=0.02, maxval=1.00, step=0.02, tooltip="Used only when pattern recognition labels are enabled.", group=g9, display=display.data_window)
+patternLabelRankStepATR = input.float(0.05, "Pattern-label stack step / ATR", minval=0.00, maxval=0.50, step=0.01, group=g9, display=display.data_window)
+signalLabelOffsetATR = input.float(0.18, "LONG/SHORT candle offset / ATR", minval=0.02, maxval=1.00, step=0.02, tooltip="Signals are displayed outside the confirmation candle; the exact reference close remains frozen in the level/tooltip.", group=g9, display=display.data_window)
+signalPatternGapATR = input.float(0.40, "Signal-to-pattern-label minimum gap / ATR", minval=0.10, maxval=2.00, step=0.05, group=g9, display=display.data_window)
+rightLabelGapATR = input.float(0.18, "Right price-label minimum gap / ATR", minval=0.05, maxval=1.00, step=0.01, tooltip="Compact TP / SL / REF tags use collision lanes; their horizontal levels remain at exact prices.", group=g9, display=display.data_window)
+structureTransparency = input.int(72, "Historical vertex-line transparency", minval=0, maxval=95, tooltip="Higher = quieter. Vertex paths are evidence of the recognized structure, not a forecast path.", group=g9, display=display.data_window)
+formationBoundaryTransparency = input.int(76, "Formation-boundary transparency", minval=0, maxval=95, group=g9, display=display.data_window)
+projectionBoundaryTransparency = input.int(48, "Projected-boundary transparency", minval=0, maxval=95, group=g9, display=display.data_window)
+panel_position = input.string("top_right", "Detection panel position", options=["top_left", "top_center", "top_right", "middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group=g9, display=display.data_window)
+reason_position = input.string("bottom_right", "Evidence panel position", options=["top_left", "top_center", "top_right", "middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group=g9, display=display.data_window)
+panel_transparency = input.int(15, "Panel transparency", minval=0, maxval=100, group=g9, display=display.data_window)
+panel_text_size = input.string("small", "Panel text size", options=["tiny", "small", "normal", "large"], group=g9, display=display.data_window)
+
+g10 = "10 | Alerts"
+alertPending = input.bool(false, "JSON: newly detected structures", group=g10, display=display.data_window)
+alertConfirmed = input.bool(true, "JSON: breakout / reversal confirmation", group=g10, display=display.data_window)
+alertFinished = input.bool(false, "JSON: all other terminal observations", group=g10, display=display.data_window)
+alertExitEvents = input.bool(true, "JSON: selected-signal TP / SL / ambiguity / expiry", group=g10, display=display.data_window)
+
+g11 = "11 | Evidence grades / exits"
+signalMinGrade = input.string("B", "Minimum signal / confirmation-alert grade", options=["C", "B", "A", "A+"], group=g11, display=display.data_window)
+gradeBThreshold = input.float(55.0, "B: minimum setup score", minval=0.0, maxval=100.0, step=1.0, group=g11, display=display.data_window)
+gradeAThreshold = input.float(70.0, "A: minimum setup score (+ quality / R/R gates)", minval=0.0, maxval=100.0, step=1.0, group=g11, display=display.data_window)
+gradePlusThreshold = input.float(85.0, "A+: minimum setup score (+ all evidence gates)", minval=0.0, maxval=100.0, step=1.0, group=g11, display=display.data_window)
+scoreUseVolume = input.bool(true, "Include chart-feed relative volume in evidence", tooltip="Missing or disabled volume is N/A, not a positive confirmation. Score uses available weights; maximum grade is A without volume evidence. Feed volume may be tick volume.", group=g11, display=display.data_window)
+showWeakSignals = input.bool(false, "Show below-minimum representatives as tiny WATCH dots", tooltip="Off by default. When enabled, weak representatives render as small unlabeled grey dots; details remain in the tooltip.", group=g11, display=display.data_window)
+showExitEvents = input.bool(true, "Show selected-signal TP / SL / ambiguity / expiry markers", group=g11, display=display.data_window)
+eventLabelLimit = input.int(180, "Combined entry / exit marker history", minval=20, maxval=300, group=g11, display=display.data_window)
+
+if barstate.isfirst and not (gradeBThreshold < gradeAThreshold and gradeAThreshold < gradePlusThreshold)
+    runtime.error("Evidence thresholds must satisfy B < A < A+. No automatic threshold reordering.")
+
+// ============================================================================
+// 2. TYPES / CLOSED-BAR STATE
+// ============================================================================
+type Swing
+    int x
+    float y
+    int side
+    float atrAtPivot
+
+type Pattern
+    string key = ""
+    string name = ""
+    string family = ""
+    string evidence = ""
+    int bias = 0
+    int direction = 0
+    int state = 0
+    int startX = 0
+    int endX = 0
+    int baseX = 0
+    int born = 0
+    int confirmedAt = na
+    int finishedAt = na
+    int validBars = 0
+    float score = 0.0
+    float formationATR = na
+    float upper = na
+    float lower = na
+    float upperSlope = 0.0
+    float lowerSlope = 0.0
+    float invalidation = na
+    float height = na
+    float fixedGoal = na
+    float entry = na
+    float stop = na
+    float target = na
+    float rr = na
+    int serial = 0
+    float strength = na
+    float confirmQuality = na
+    float clearanceATR = na
+    float relativeVolume = na
+    float volumeQuality = na
+    float rrQuality = na
+    bool volumeAvailable = false
+    int grade = -1
+    bool representative = false
+    bool signalSelected = false
+    array<int> xs
+    array<float> ys
+
+type Diagnostics
+    int accepted = 0
+    int capacitySkipped = 0
+    int overlapSkipped = 0
+
+// State codes: 0 READY, 1 CONFIRMED, 2 TARGET_TOUCHED, 3 INVALIDATED,
+//              4 EXPIRED, 5 AMBIGUOUS (both barriers in one OHLC bar), 6 SKIPPED.
+var array<Swing> swings = array.new<Swing>()
+var array<Pattern> registry = array.new<Pattern>()
+var map<string, int> seen = map.new<string, int>()
+var array<string> seenKeys = array.new_string()
+var array<int> seenAt = array.new_int()
+var Diagnostics diagnostics = Diagnostics.new()
+var array<string> eventJSON = array.new_string()
+var array<int> eventCodes = array.new_int()
+var array<int> eventDirections = array.new_int()
+// Codes retain event-time state. References are serialized AFTER same-bar selection.
+// READY JSON deliberately omits fields that may only exist later on the same bar.
+var array<Pattern> eventPatterns = array.new<Pattern>()
+var array<label> eventLabels = array.new_label()
+var array<line> drawLines = array.new_line()
+var array<label> drawLabels = array.new_label()
+// Per-frame label-layout lanes. Cleared on barstate.islast before drawings are rebuilt.
+var array<int> rightLabelXs = array.new_int()
+var array<float> rightLabelYs = array.new_float()
+var array<float> rightLabelGaps = array.new_float()
+
+float atrNow = ta.atr(atrLength)
+float emaContext = ta.ema(close, contextLength)
+float previousVolumeMean = ta.sma(volume, 20)[1]
+float pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+float pivotLow = ta.pivotlow(low, pivotLen, pivotLen)
+float tick = syminfo.mintick
+bool warmed = not na(atrNow) and atrNow > tick and bar_index >= math.max(atrLength + 1, pivotLen * 2 + 1)
+
+// ============================================================================
+// 3. PURE HELPERS
+// ============================================================================
+f_clamp(float v, float lo, float hi) =>
+    math.max(lo, math.min(hi, v))
+
+f_price(float v) =>
+    na(v) ? "-" : str.tostring(v, format.mintick)
+
+f_ratio(float numerator, float denominator) =>
+    denominator > 0.0 ? numerator / denominator : na
+
+f_near(float v, float target, float tolerance) =>
+    not na(v) and math.abs(v - target) <= tolerance
+
+f_between(float v, float lo, float hi, float tolerance) =>
+    not na(v) and v >= lo - tolerance and v <= hi + tolerance
+
+f_balance(int leftBars, int rightBars) =>
+    leftBars > 0 and rightBars > 0 ? math.min(leftBars, rightBars) * 1.0 / math.max(leftBars, rightBars) : 0.0
+
+f_score(float fit, float symmetry, float prominence) =>
+    100.0 * (0.55 * f_clamp(fit, 0.0, 1.0) + 0.25 * f_clamp(symmetry, 0.0, 1.0) + 0.20 * f_clamp(prominence, 0.0, 1.0))
+
+f_y(float y, float slope, int base, int at) =>
+    y + slope * (at - base)
+
+f_state(int state) =>
+    switch state
+        0 => "READY / 形状検出"
+        1 => "CONFIRMED / 確認"
+        2 => "TARGET / 目標接触"
+        3 => "INVALID / 無効"
+        4 => "EXPIRED / 期限切れ"
+        5 => "AMBIGUOUS / 順序不明"
+        => "SKIPPED / 見送り"
+
+f_dir(int direction) =>
+    direction == 1 ? "BULL" : direction == -1 ? "BEAR" : "EITHER"
+
+f_color(int direction) =>
+    direction == 1 ? color.lime : direction == -1 ? color.red : color.orange
+
+f_position(string p) =>
+    switch p
+        "top_left" => position.top_left
+        "top_center" => position.top_center
+        "middle_left" => position.middle_left
+        "middle_center" => position.middle_center
+        "middle_right" => position.middle_right
+        "bottom_left" => position.bottom_left
+        "bottom_center" => position.bottom_center
+        "bottom_right" => position.bottom_right
+        => position.top_right
+
+f_textSize() =>
+    switch panel_text_size
+        "tiny" => size.tiny
+        "normal" => size.normal
+        "large" => size.large
+        => size.small
+
+f_escape(string value) =>
+    str.replace_all(str.replace_all(str.replace_all(str.replace_all(value, "\\", "\\\\"), "\"", "\\\""), "\n", "\\n"), "\r", "\\r")
+
+f_number(float value) =>
+    na(value) ? "null" : str.tostring(value, "#.################")
+
+// Evidence weights: geometry 40, confirmation candle 30, feed volume 15, R/R 15.
+// No pattern-count bonus, trend oscillator stack, or assumed statistical independence.
+f_gradeName(int grade) =>
+    grade == 3 ? "A+" : grade == 2 ? "A" : grade == 1 ? "B" : grade == 0 ? "C" : "N/A"
+
+f_minGrade() =>
+    signalMinGrade == "A+" ? 3 : signalMinGrade == "A" ? 2 : signalMinGrade == "B" ? 1 : 0
+
+f_ref(Pattern p) =>
+    "P" + str.tostring(p.serial)
+
+f_roundLevel(float value) =>
+    not na(value) and tick > 0.0 ? math.round(value / tick) * tick : na
+
+f_confirmationQuality(int direction, float o, float h, float l, float c, float boundary, float formationATR, float bufferATR) =>
+    float result = 0.0
+    float candleRange = h - l
+    bool valid = (direction == 1 or direction == -1) and not na(candleRange) and candleRange > tick and not na(formationATR) and formationATR > tick and not na(boundary) and not na(o) and not na(c) and h >= math.max(o, c) and l <= math.min(o, c)
+    if valid
+        float closeLocation = direction == 1 ? (c - l) / candleRange : (h - c) / candleRange
+        float directionalBody = math.max(0.0, direction * (c - o)) / candleRange
+        float clearance = math.max(0.0, direction * (c - boundary) / formationATR - bufferATR)
+        result := 0.50 * f_clamp(closeLocation, 0.0, 1.0) + 0.30 * f_clamp(directionalBody, 0.0, 1.0) + 0.20 * f_clamp(clearance / 0.50, 0.0, 1.0)
+    f_clamp(result, 0.0, 1.0)
+
+f_evidenceTotal(float shapeScore, float confirmation, float relativeVolume, float rr, bool volumeAvailable) =>
+    float shapePart = na(shapeScore) ? 0.0 : f_clamp(shapeScore / 100.0, 0.0, 1.0)
+    float confirmPart = na(confirmation) ? 0.0 : f_clamp(confirmation, 0.0, 1.0)
+    bool useVolume = volumeAvailable and not na(relativeVolume) and relativeVolume >= 0.0
+    float volumePart = useVolume ? f_clamp((relativeVolume - 0.80) / 0.70, 0.0, 1.0) : 0.0
+    float rrPart = na(rr) ? 0.0 : f_clamp(rr / 2.0, 0.0, 1.0)
+    float availableWeight = useVolume ? 100.0 : 85.0
+    100.0 * (40.0 * shapePart + 30.0 * confirmPart + 15.0 * volumePart + 15.0 * rrPart) / availableWeight
+
+f_evidenceGrade(float total, float shapeScore, float confirmation, float rr, bool volumeAvailable, float relativeVolume) =>
+    int result = 0
+    if not na(total) and not na(rr) and rr >= 0.50 and total >= gradeBThreshold
+        result := 1
+        if total >= gradeAThreshold and shapeScore >= 60.0 and confirmation >= 0.50 and rr >= 1.0
+            result := 2
+            if total >= gradePlusThreshold and shapeScore >= 75.0 and confirmation >= 0.65 and rr >= 2.0 and volumeAvailable and not na(relativeVolume) and relativeVolume >= 1.20
+                result := 3
+    result
+
+// Compute ONCE at actual price confirmation; never upgrade an old arrow after a win.
+f_assessSignal(Pattern p, float boundary) =>
+    p.confirmQuality := f_confirmationQuality(p.direction, open, high, low, close, boundary, p.formationATR, breakBufferATR)
+    p.clearanceATR := math.max(0.0, p.direction * (close - boundary) / p.formationATR - breakBufferATR)
+    p.volumeAvailable := scoreUseVolume and not na(volume) and volume >= 0.0 and not na(previousVolumeMean) and previousVolumeMean > 0.0
+    p.relativeVolume := p.volumeAvailable ? volume / previousVolumeMean : na
+    p.volumeQuality := p.volumeAvailable ? f_clamp((p.relativeVolume - 0.80) / 0.70, 0.0, 1.0) : na
+    p.rrQuality := f_clamp(p.rr / 2.0, 0.0, 1.0)
+    p.strength := f_evidenceTotal(p.score, p.confirmQuality, p.relativeVolume, p.rr, p.volumeAvailable)
+    p.grade := f_evidenceGrade(p.strength, p.score, p.confirmQuality, p.rr, p.volumeAvailable, p.relativeVolume)
+    true
+
+f_isSelectedExit(Pattern p, int code) =>
+    p.signalSelected and not na(p.confirmedAt) and code >= 2 and code <= 5
+
+f_exitKind(Pattern p, int code) =>
+    bool trackedExit = not na(p.confirmedAt)
+    not trackedExit ? "NONE" : code == 2 ? "TP_TOUCH" : code == 3 ? "SL_TOUCH" : code == 5 ? "TP_SL_AMBIGUOUS" : code == 4 ? "TIME_REVIEW" : "NONE"
+
+// Collect event-time codes without serializing mutable/unfinished selection fields yet.
+f_event(Pattern p, int code) =>
+    array.push(eventCodes, code)
+    array.push(eventDirections, p.direction)
+    array.push(eventPatterns, p)
+    true
+
+// One representative per direction per confirmation bar. Other patterns remain
+// observations, NOT extra independent votes. Ties: grade, score, R/R, earlier registration.
+f_selectRepresentatives() =>
+    int bullIndex = -1
+    int bearIndex = -1
+    if array.size(registry) > 0
+        for i = 0 to array.size(registry) - 1
+            Pattern p = array.get(registry, i)
+            if p.state == 1 and p.confirmedAt == bar_index
+                int previousIndex = p.direction == 1 ? bullIndex : bearIndex
+                bool better = previousIndex < 0
+                if previousIndex >= 0
+                    Pattern previous = array.get(registry, previousIndex)
+                    better := p.grade > previous.grade or (p.grade == previous.grade and p.strength > previous.strength) or (p.grade == previous.grade and p.strength == previous.strength and p.rr > previous.rr)
+                if better
+                    if p.direction == 1
+                        bullIndex := i
+                    else
+                        bearIndex := i
+        for i = 0 to array.size(registry) - 1
+            Pattern p = array.get(registry, i)
+            if p.state == 1 and p.confirmedAt == bar_index
+                p.representative := i == bullIndex or i == bearIndex
+                p.signalSelected := p.representative and p.grade >= f_minGrade()
+    true
+
+f_jsonEvent(Pattern p, int code, int eventDirection) =>
+    bool hasSignal = code != 0 and not na(p.confirmedAt)
+    string result = "{\"id\":\"" + f_escape(p.key) + "\",\"ref\":\"" + f_ref(p) + "\",\"name\":\"" + f_escape(p.name) + "\",\"state\":" + str.tostring(code) + ",\"direction\":" + str.tostring(eventDirection)
+    result += ",\"shape_score\":" + f_number(p.score) + ",\"evidence_score\":" + (hasSignal ? f_number(p.strength) : "null") + ",\"grade\":" + (hasSignal ? "\"" + f_gradeName(p.grade) + "\"" : "null")
+    result += ",\"representative\":" + (hasSignal and p.representative ? "true" : "false") + ",\"selected_signal\":" + (hasSignal and p.signalSelected ? "true" : "false") + ",\"recognized_bar\":" + str.tostring(p.born) + ",\"signal_bar\":" + (hasSignal ? str.tostring(p.confirmedAt) : "null")
+    result += ",\"reference_close\":" + (hasSignal ? f_number(p.entry) : "null") + ",\"invalidation\":" + (hasSignal ? f_number(p.stop) : "null") + ",\"target_projection\":" + (hasSignal ? f_number(p.target) : "null") + ",\"reference_rr\":" + (hasSignal ? f_number(p.rr) : "null")
+    result += ",\"confirmation_quality\":" + (hasSignal ? f_number(p.confirmQuality) : "null") + ",\"relative_volume\":" + (hasSignal ? f_number(p.relativeVolume) : "null") + ",\"volume_evidence_used\":" + (hasSignal and p.volumeAvailable ? "true" : "false")
+    result += ",\"exit_kind\":\"" + (hasSignal ? f_exitKind(p, code) : "NONE") + "\",\"event_bar\":" + str.tostring(bar_index) + ",\"observed_at_bar_close\":true,\"order_or_fill\":false}"
+    result
+
+f_dispatchEvents() =>
+    array.clear(eventJSON)
+    if array.size(eventCodes) > 0
+        for i = 0 to array.size(eventCodes) - 1
+            int code = array.get(eventCodes, i)
+            Pattern p = array.get(eventPatterns, i)
+            bool selectedExit = f_isSelectedExit(p, code)
+            // Selected exit events do NOT pass through a fresh entry-quality filter.
+            bool enabled = code == 0 ? alertPending : code == 1 ? (alertConfirmed and p.signalSelected) : selectedExit ? (alertExitEvents or alertFinished) : alertFinished
+            if enabled
+                array.push(eventJSON, f_jsonEvent(p, code, array.get(eventDirections, i)))
+    true
+
+// Alternating swing buffer. Same-side replacement changes ONLY the working buffer.
+// Pattern vertices are copied into primitive arrays on registration.
+f_pushSwing(int x, float y, int side, float pivotATR) =>
+    bool changed = false
+    if not na(y) and not na(pivotATR) and pivotATR > 0.0
+        int count = array.size(swings)
+        if count == 0
+            array.push(swings, Swing.new(x, y, side, pivotATR))
+            changed := true
+        else
+            Swing last = array.get(swings, count - 1)
+            if x > last.x
+                if side == last.side
+                    bool moreExtreme = side == 1 ? y > last.y : y < last.y
+                    if moreExtreme
+                        array.set(swings, count - 1, Swing.new(x, y, side, pivotATR))
+                        changed := true
+                else if x - last.x >= minPivotGap and math.abs(y - last.y) >= minSwingATR * pivotATR
+                    array.push(swings, Swing.new(x, y, side, pivotATR))
+                    changed := true
+        while array.size(swings) > 100
+            array.shift(swings)
+        while array.size(swings) > 0
+            Swing oldest = array.get(swings, 0)
+            if x - oldest.x > lookback + pivotLen
+                array.shift(swings)
+            else
+                break
+    changed
+
+f_vertices(int first, int last) =>
+    array<int> xs = array.new_int()
+    array<float> ys = array.new_float()
+    if first >= 0 and last >= first and last < array.size(swings)
+        for i = first to last
+            Swing s = array.get(swings, i)
+            array.push(xs, s.x)
+            array.push(ys, s.y)
+    [xs, ys]
+
+// Strong identity: pattern name AND every observed vertex bar.
+// Lookback-bounded dedup ledger survives eviction of finished display records.
+f_identity(string name, array<int> xs) =>
+    string result = name
+    for x in xs
+        result += ":" + str.tostring(x)
+    result
+
+f_register(string name, string family, int bias, int startX, int endX, int baseX, float upper, float upperSlope, float lower, float lowerSlope, float invalidation, float height, float fixedGoal, float score, string evidence, array<int> xs, array<float> ys, int validity) =>
+    bool added = false
+    string identity = f_identity(name, xs)
+    bool geometryOK = array.size(xs) >= 2 and array.size(xs) == array.size(ys) and startX <= endX and endX <= bar_index and bar_index - startX <= lookback and not na(upper) and not na(lower) and not na(height) and height > tick and not na(score) and score >= minScore
+    if geometryOK and not map.contains(seen, identity)
+        map.put(seen, identity, bar_index)
+        array.push(seenKeys, identity)
+        array.push(seenAt, bar_index)
+        bool overlap = false
+        if suppressOverlap and array.size(registry) > 0
+            for old in registry
+                if old.state <= 1 and old.name == name
+                    int intersection = math.max(0, math.min(endX, old.endX) - math.max(startX, old.startX) + 1)
+                    int shorter = math.max(1, math.min(endX - startX + 1, old.endX - old.startX + 1))
+                    if intersection * 1.0 / shorter >= 0.70
+                        overlap := true
+                        break
+        if overlap
+            diagnostics.overlapSkipped += 1
+        else
+            if array.size(registry) >= registryLimit
+                int removable = -1
+                for i = 0 to array.size(registry) - 1
+                    Pattern old = array.get(registry, i)
+                    if old.state > 1
+                        removable := i
+                        break
+                if removable >= 0
+                    array.remove(registry, removable)
+            if array.size(registry) < registryLimit
+                Pattern p = Pattern.new()
+                p.key := identity
+                p.serial := diagnostics.accepted + 1
+                p.name := name
+                p.family := family
+                p.evidence := evidence
+                p.bias := bias
+                p.direction := bias
+                p.startX := startX
+                p.endX := endX
+                p.baseX := baseX
+                p.born := bar_index
+                p.validBars := validity
+                p.score := f_clamp(score, 0.0, 100.0)
+                p.formationATR := atrNow
+                p.upper := upper
+                p.upperSlope := upperSlope
+                p.lower := lower
+                p.lowerSlope := lowerSlope
+                p.invalidation := invalidation
+                p.height := height
+                p.fixedGoal := fixedGoal
+                p.xs := array.copy(xs)
+                p.ys := array.copy(ys)
+                array.push(registry, p)
+                diagnostics.accepted += 1
+                f_event(p, 0)
+                added := true
+            else
+                diagnostics.capacitySkipped += 1
+    added
+
+// Regression on actual same-side confirmed pivots, x measured from the first bar.
+f_fitBoundary(int first, int last, int side, int baseX) =>
+    Swing anchorSwing = array.get(swings, first)
+    float anchorPrice = anchorSwing.y
+    float sx = 0.0
+    float sy = 0.0
+    float sxx = 0.0
+    float sxy = 0.0
+    int n = 0
+    for i = first to last
+        Swing s = array.get(swings, i)
+        if s.side == side
+            float dx = s.x - baseX
+            sx += dx
+            sy += s.y - anchorPrice
+            sxx += dx * dx
+            sxy += dx * (s.y - anchorPrice)
+            n += 1
+    float denominator = n * sxx - sx * sx
+    float slope = n >= 2 and denominator > 0.0 ? (n * sxy - sx * sy) / denominator : na
+    float intercept = n >= 2 ? anchorPrice + (sy - slope * sx) / n : na
+    float sse = 0.0
+    float worst = 0.0
+    if not na(intercept)
+        for i = first to last
+            Swing s = array.get(swings, i)
+            if s.side == side
+                float residual = s.y - f_y(intercept, slope, baseX, s.x)
+                sse += residual * residual
+                worst := math.max(worst, math.abs(residual))
+    [intercept, slope, n >= 2 ? math.sqrt(sse / n) : na, worst, n]
+
+// Pure, dimensionless classifier. All movements use the SAME ATR denominator.
+// 1 ascending tri, 2 descending tri, 3 symmetrical tri, 4 expanding tri,
+// 5 rising wedge, 6 falling wedge, 7 broadening rising, 8 broadening falling,
+// 9 rising channel, 10 falling channel, 11 horizontal channel/rectangle.
+f_geometryClass(float upperMoveATR, float lowerMoveATR, float widthRatio, float flatThreshold) =>
+    int result = 0
+    bool flatU = math.abs(upperMoveATR) <= flatThreshold
+    bool flatL = math.abs(lowerMoveATR) <= flatThreshold
+    bool contracts = widthRatio > 0.15 and widthRatio <= 0.80
+    bool expands = widthRatio >= 1.20
+    bool parallel = widthRatio > 0.80 and widthRatio < 1.20 and math.abs(upperMoveATR - lowerMoveATR) <= flatThreshold
+    if flatU and flatL and widthRatio >= 0.80 and widthRatio <= 1.20
+        result := 11
+    else if contracts
+        if flatU and lowerMoveATR > flatThreshold
+            result := 1
+        else if flatL and upperMoveATR < -flatThreshold
+            result := 2
+        else if upperMoveATR < -flatThreshold and lowerMoveATR > flatThreshold
+            result := 3
+        else if upperMoveATR > flatThreshold and lowerMoveATR > upperMoveATR
+            result := 5
+        else if lowerMoveATR < -flatThreshold and upperMoveATR < lowerMoveATR
+            result := 6
+    else if expands
+        if upperMoveATR > flatThreshold and lowerMoveATR < -flatThreshold
+            result := 4
+        else if lowerMoveATR > flatThreshold and upperMoveATR > lowerMoveATR
+            result := 7
+        else if upperMoveATR < -flatThreshold and lowerMoveATR < upperMoveATR
+            result := 8
+    else if parallel
+        if upperMoveATR > flatThreshold and lowerMoveATR > flatThreshold
+            result := 9
+        else if upperMoveATR < -flatThreshold and lowerMoveATR < -flatThreshold
+            result := 10
+    result
+
+// ============================================================================
+// 4. CLASSIC REVERSALS: chronological alternating pivots + real necklines
+// ============================================================================
+f_classic() =>
+    int n = array.size(swings)
+    float tol = levelTolATR * atrNow
+    float padding = stopPadATR * atrNow
+    if detect_classic and classic_double and n >= 3
+        Swing a = array.get(swings, n - 3)
+        Swing b = array.get(swings, n - 2)
+        Swing c = array.get(swings, n - 1)
+        float difference = math.abs(a.y - c.y)
+        float height = a.side * ((a.y + c.y) * 0.5 - b.y)
+        float balance = f_balance(b.x - a.x, c.x - b.x)
+        if a.side == c.side and b.side == -a.side and difference <= tol and height >= minHeightATR * atrNow and balance >= 1.0 / maxTimeRatio
+            [xs, ys] = f_vertices(n - 3, n - 1)
+            bool top = a.side == 1
+            float extreme = top ? math.max(a.y, c.y) : math.min(a.y, c.y)
+            float quality = f_score(1.0 - difference / math.max(tol, tick), balance, height / (3.0 * atrNow))
+            string why = "Peak/trough mismatch " + str.tostring(difference / atrNow, "#.##") + " ATR; depth " + str.tostring(height / atrNow, "#.##") + " ATR; neckline is the intervening pivot."
+            f_register(top ? "Double Top" : "Double Bottom", "Classic", -a.side, a.x, c.x, b.x, top ? extreme : b.y, 0.0, top ? b.y : extreme, 0.0, extreme + a.side * padding, height, na, quality, why, xs, ys, pendingBars)
+    if detect_classic and n >= 5 and (classic_triple or classic_hs)
+        Swing a = array.get(swings, n - 5)
+        Swing b = array.get(swings, n - 4)
+        Swing c = array.get(swings, n - 3)
+        Swing d = array.get(swings, n - 2)
+        Swing e = array.get(swings, n - 1)
+        bool top = a.side == 1
+        float s = a.side
+        float outerMax = math.max(a.y * s, math.max(c.y * s, e.y * s))
+        float outerMin = math.min(a.y * s, math.min(c.y * s, e.y * s))
+        float neckSlope = (d.y - b.y) / (d.x - b.x)
+        float neckAtHead = f_y(b.y, neckSlope, b.x, c.x)
+        float avgOuter = (a.y + c.y + e.y) / 3.0
+        float height = s * (avgOuter - neckAtHead)
+        float balance = f_balance(c.x - a.x, e.x - c.x)
+        bool chronology = a.side == c.side and c.side == e.side and b.side == d.side and b.side == -a.side
+        bool neckOK = math.abs(d.y - b.y) <= math.max(tol * 2.0, height * 0.5)
+        if chronology and balance >= 1.0 / maxTimeRatio
+            [xs, ys] = f_vertices(n - 5, n - 1)
+            float extreme = s * outerMax
+            if classic_triple and outerMax - outerMin <= tol and height >= minHeightATR * atrNow and neckOK
+                float quality = f_score(1.0 - (outerMax - outerMin) / math.max(tol, tick), balance, height / (3.0 * atrNow))
+                string why = "Three alternating extremes; spread " + str.tostring((outerMax - outerMin) / atrNow, "#.##") + " ATR. Neckline joins the two intervening pivots."
+                f_register(top ? "Triple Top" : "Triple Bottom", "Classic", -a.side, a.x, e.x, b.x, top ? extreme : b.y, top ? 0.0 : neckSlope, top ? b.y : extreme, top ? neckSlope : 0.0, extreme + s * padding, height, na, quality, why, xs, ys, pendingBars)
+            float shoulderError = math.abs(a.y - e.y)
+            float headRise = s * c.y - math.max(s * a.y, s * e.y)
+            float headHeight = s * (c.y - neckAtHead)
+            if classic_hs and shoulderError <= tol and headRise >= 0.5 * atrNow and headHeight >= minHeightATR * atrNow and math.abs(d.y - b.y) <= headHeight * 0.5
+                float quality = f_score(1.0 - shoulderError / math.max(tol, tick), balance, headRise / atrNow)
+                string why = "Shoulder mismatch " + str.tostring(shoulderError / atrNow, "#.##") + " ATR; head prominence " + str.tostring(headRise / atrNow, "#.##") + " ATR; sloping neckline retained."
+                f_register(top ? "Head & Shoulders" : "Inverse Head & Shoulders", "Classic", -a.side, a.x, e.x, b.x, top ? c.y : b.y, top ? 0.0 : neckSlope, top ? b.y : c.y, top ? neckSlope : 0.0, c.y + s * padding, headHeight, na, quality, why, xs, ys, pendingBars)
+    if detect_classic and classic_hs and n >= 9
+        Swing a = array.get(swings, n - 9)
+        Swing c = array.get(swings, n - 7)
+        Swing neckL = array.get(swings, n - 6)
+        Swing head = array.get(swings, n - 5)
+        Swing neckR = array.get(swings, n - 4)
+        Swing g = array.get(swings, n - 3)
+        Swing e = array.get(swings, n - 1)
+        float s = a.side
+        float leftMean = (a.y + c.y) * 0.5
+        float rightMean = (g.y + e.y) * 0.5
+        float outerMax = math.max(math.max(s * a.y, s * c.y), math.max(s * g.y, s * e.y))
+        float outerMin = math.min(math.min(s * a.y, s * c.y), math.min(s * g.y, s * e.y))
+        float neckSlope = (neckR.y - neckL.y) / (neckR.x - neckL.x)
+        float depth = s * (head.y - f_y(neckL.y, neckSlope, neckL.x, head.x))
+        float balance = f_balance(head.x - a.x, e.x - head.x)
+        if s * head.y - outerMax >= 0.5 * atrNow and outerMax - outerMin <= tol * 2.0 and math.abs(leftMean - rightMean) <= tol and depth >= minHeightATR * atrNow and balance >= 1.0 / maxTimeRatio and math.abs(neckR.y - neckL.y) <= depth * 0.5
+            [xs, ys] = f_vertices(n - 9, n - 1)
+            bool top = a.side == 1
+            float quality = f_score(1.0 - (outerMax - outerMin) / math.max(tol * 2.0, tick), balance, (s * head.y - outerMax) / atrNow)
+            f_register(top ? "Complex Head & Shoulders" : "Complex Inverse Head & Shoulders", "Classic", -a.side, a.x, e.x, neckL.x, top ? head.y : neckL.y, top ? 0.0 : neckSlope, top ? neckL.y : head.y, top ? neckSlope : 0.0, head.y + s * padding, depth, na, quality, "Nine alternating pivots; two shoulders per side; dominant central head; actual neckline pivots.", xs, ys, pendingBars)
+    true
+
+// ============================================================================
+// 5. FITTED BOUNDARIES: triangles, wedges, channels, rectangles, flags, pennants
+// ============================================================================
+f_boundaries() =>
+    int n = array.size(swings)
+    int required = min_touches * 2
+    if n >= required and (detect_triangles or detect_continuation or (detect_special and spec_broadening))
+        int first = n - required
+        Swing a = array.get(swings, first)
+        Swing z = array.get(swings, n - 1)
+        int span = z.x - a.x
+        if span >= pivotLen * 3 and bar_index - a.x <= lookback
+            [upper, us, urms, umax, nh] = f_fitBoundary(first, n - 1, 1, a.x)
+            [lower, ls, lrms, lmax, nl] = f_fitBoundary(first, n - 1, -1, a.x)
+            float w0 = upper - lower
+            float upperEnd = f_y(upper, us, a.x, z.x)
+            float lowerEnd = f_y(lower, ls, a.x, z.x)
+            float w1 = upperEnd - lowerEnd
+            float tolerance = fitTolATR * atrNow
+            bool fitOK = nh >= min_touches and nl >= min_touches and not na(urms) and not na(lrms) and umax <= tolerance and lmax <= tolerance
+            if fitOK and math.min(w0, w1) > tick and math.max(w0, w1) >= minHeightATR * atrNow
+                // Inspect actual candles BETWEEN the first and last formation vertices.
+                // Right-confirmation bars are deliberately not retrofitted into the shape.
+                int violations = 0
+                for x = a.x to z.x
+                    int offset = bar_index - x
+                    float u = f_y(upper, us, a.x, x)
+                    float l = f_y(lower, ls, a.x, x)
+                    if high[offset] > u + tolerance or low[offset] < l - tolerance
+                        violations += 1
+                float containment = 1.0 - violations * 1.0 / (span + 1)
+                if containment >= 0.85
+                    float ru = us * span / atrNow
+                    float rl = ls * span / atrNow
+                    float widthRatio = w1 / w0
+                    int classId = f_geometryClass(ru, rl, widthRatio, flatMoveATR)
+                    [xs, ys] = f_vertices(first, n - 1)
+                    float error = math.max(umax, lmax)
+                    float quality = f_score(1.0 - error / math.max(tolerance, tick), containment, math.max(w0, w1) / (4.0 * atrNow))
+                    string why = "Touches H/L " + str.tostring(nh) + "/" + str.tostring(nl) + "; max fit error " + str.tostring(error / atrNow, "#.##") + " ATR; final/initial width " + str.tostring(widthRatio, "#.##") + "; candle containment " + str.tostring(containment * 100.0, "#") + "%."
+                    string name = ""
+                    int bias = 0
+                    if detect_triangles
+                        if classId == 1 and tri_ascending
+                            name := "Ascending Triangle"
+                            bias := 1
+                        if classId == 2 and tri_descending
+                            name := "Descending Triangle"
+                            bias := -1
+                        if classId == 3 and tri_symmetrical
+                            name := "Symmetrical Triangle"
+                        if classId == 4 and tri_expanding
+                            name := "Expanding Triangle"
+                    if classId == 4 and name == "" and detect_special and spec_broadening
+                        name := "Broadening Formation"
+                    if detect_continuation
+                        if cont_wedge
+                            if classId == 5
+                                name := "Rising Wedge"
+                                bias := -1
+                            if classId == 6
+                                name := "Falling Wedge"
+                                bias := 1
+                            if classId == 7
+                                name := "Broadening Rising Wedge"
+                                bias := -1
+                            if classId == 8
+                                name := "Broadening Falling Wedge"
+                                bias := 1
+                        if cont_channel and classId == 9
+                            name := "Ascending Channel"
+                        if cont_channel and classId == 10
+                            name := "Descending Channel"
+                        if classId == 11 and (cont_channel or cont_rectangle)
+                            name := cont_rectangle ? "Rectangle" : "Horizontal Channel"
+                    if name != ""
+                        f_register(name, "Boundaries", bias, a.x, z.x, a.x, upper, us, lower, ls, na, math.max(w0, w1), na, quality, why, xs, ys, pendingBars)
+                    // Flag and pennant checks are INDEPENDENT of the generic classifier.
+                    // The pole is the actual immediately preceding alternating swing.
+                    if detect_continuation and first >= 1 and (cont_flag or cont_pennant)
+                        Swing pole = array.get(swings, first - 1)
+                        int poleDirection = a.y > pole.y ? 1 : -1
+                        float poleHeight = math.abs(a.y - pole.y)
+                        int poleBars = a.x - pole.x
+                        float retracement = poleDirection == 1 ? a.y - lowerEnd : upperEnd - a.y
+                        bool poleOK = poleHeight >= poleMinATR * atrNow and span <= poleBars * 5 and bar_index - pole.x <= lookback and retracement > 0.0 and retracement <= poleHeight * 0.5 and math.max(w0, w1) <= poleHeight * 0.6
+                        if poleOK
+                            [fx, fy] = f_vertices(first - 1, n - 1)
+                            bool flatFlag = classId == 11
+                            bool counterFlag = poleDirection == 1 ? classId == 10 : classId == 9
+                            if cont_flag and (flatFlag or counterFlag)
+                                string flagName = poleDirection == 1 ? (flatFlag ? "Bull Horizontal Flag" : "Bull Flag") : (flatFlag ? "Bear Horizontal Flag" : "Bear Flag")
+                                f_register(flagName, "Continuation", poleDirection, pole.x, z.x, a.x, upper, us, lower, ls, na, poleHeight, na, quality, why + " Pole " + str.tostring(poleHeight / atrNow, "#.##") + " ATR; pullback <= 50% of pole.", fx, fy, pendingBars)
+                            if cont_pennant and classId == 3
+                                f_register(poleDirection == 1 ? "Bull Pennant" : "Bear Pennant", "Continuation", poleDirection, pole.x, z.x, a.x, upper, us, lower, ls, na, poleHeight, na, quality, why + " Preceding measured pole; converging opposite slopes.", fx, fy, pendingBars)
+    true
+
+// ============================================================================
+// 6. HARMONICS: all FIVE points, chronological topology, D and completion ratios
+// ============================================================================
+f_harmonicRegister(string name, int direction, int first, float score, string evidence, float goal) =>
+    int n = array.size(swings)
+    Swing x = array.get(swings, first)
+    Swing d = array.get(swings, n - 1)
+    [xs, ys] = f_vertices(first, n - 1)
+    float trigger = d.y + direction * reversalATR * atrNow
+    float upper = direction == 1 ? trigger : d.y
+    float lower = direction == -1 ? trigger : d.y
+    float invalidation = d.y - direction * stopPadATR * atrNow
+    f_register(name, "Harmonic", direction, x.x, d.x, d.x, upper, 0.0, lower, 0.0, invalidation, math.abs(goal - d.y), goal, score, evidence + " D is a confirmed pivot; recognition is delayed by right bars. Reference goal = 61.8% of the final leg.", xs, ys, pendingBars)
+
+f_harmonics() =>
+    int n = array.size(swings)
+    if detect_harmonic and n >= 5
+        Swing p0 = array.get(swings, n - 5)
+        Swing p1 = array.get(swings, n - 4)
+        Swing p2 = array.get(swings, n - 3)
+        Swing p3 = array.get(swings, n - 2)
+        Swing p4 = array.get(swings, n - 1)
+        int direction = -p4.side
+        float x = direction * p0.y
+        float a = direction * p1.y
+        float b = direction * p2.y
+        float c = direction * p3.y
+        float d = direction * p4.y
+        float xa = a - x
+        float ab = a - b
+        float bc = c - b
+        float cd = c - d
+        if xa >= minHeightATR * atrNow and ab > tick and bc > tick and cd > tick and bar_index - p0.x <= lookback
+            float rab = ab / xa
+            float rbc = bc / ab
+            float rcd = cd / bc
+            float rad = (a - d) / xa
+            float symmetry = f_balance(p2.x - p1.x, p4.x - p3.x)
+            float abcd = cd / ab
+            float t = fibTolerance
+            bool ordinary = x < b and b < a and b < c and c < a and d < b
+            float goal = p4.y + (p3.y - p4.y) * 0.618
+            string prefix = direction == 1 ? "Bullish " : "Bearish "
+            string ratios = "AB/XA=" + str.tostring(rab, "#.###") + "; BC/AB=" + str.tostring(rbc, "#.###") + "; CD/BC=" + str.tostring(rcd, "#.###") + "; AD/XA=" + str.tostring(rad, "#.###") + "; CD/AB=" + str.tostring(abcd, "#.###") + "."
+            if ordinary and f_between(rbc, 0.382, 0.886, t)
+                if harm_gartley and d > x and f_near(rab, 0.618, t) and f_near(rad, 0.786, t) and f_between(rcd, 1.272, 1.618, t) and f_near(abcd, 1.0, t * 2.0)
+                    float fit = 1.0 - (math.abs(rab - 0.618) + math.abs(rad - 0.786) + math.abs(abcd - 1.0) * 0.5) / (3.0 * t)
+                    f_harmonicRegister(prefix + "Gartley", direction, n - 5, f_score(fit, symmetry, xa / (4.0 * atrNow)), ratios, goal)
+                if harm_butterfly and d < x and f_near(rab, 0.786, t) and f_near(rad, 1.27, t) and f_between(rcd, 1.618, 2.618, t) and f_between(abcd, 1.0, 1.618, t)
+                    float fit = 1.0 - (math.abs(rab - 0.786) + math.abs(rad - 1.27)) / (2.0 * t)
+                    f_harmonicRegister(prefix + "Butterfly", direction, n - 5, f_score(fit, symmetry, xa / (4.0 * atrNow)), ratios, goal)
+                if harm_bat and d > x and f_between(rab, 0.382, 0.50, t) and f_near(rad, 0.886, t) and f_between(rcd, 1.618, 2.618, t) and f_between(abcd, 1.0, 2.618, t)
+                    float fit = 1.0 - math.abs(rad - 0.886) / t
+                    f_harmonicRegister(prefix + "Bat", direction, n - 5, f_score(fit, symmetry, xa / (4.0 * atrNow)), ratios, goal)
+                if harm_crab and d < x and f_between(rab, 0.382, 0.618, t) and f_near(rad, 1.618, t) and f_between(rcd, 2.618, 3.618, t) and abcd >= 1.618 - t
+                    float fit = 1.0 - math.abs(rad - 1.618) / t
+                    f_harmonicRegister(prefix + "Crab", direction, n - 5, f_score(fit, symmetry, xa / (4.0 * atrNow)), ratios, goal)
+            // Cypher uses XC/XA and CD/XC, NOT the ordinary AD/XA completion.
+            float xc = c - x
+            float rxc = xc / xa
+            float rdxc = xc > 0.0 ? cd / xc : na
+            if harm_cypher and x < b and b < a and c > a and d > x and d < b and f_between(rab, 0.382, 0.618, t) and f_between(rxc, 1.272, 1.414, t) and f_near(rdxc, 0.786, t)
+                float fit = 1.0 - math.abs(rdxc - 0.786) / t
+                string why = ratios + " XC/XA=" + str.tostring(rxc, "#.###") + "; CD/XC=" + str.tostring(rdxc, "#.###") + "."
+                f_harmonicRegister(prefix + "Cypher", direction, n - 5, f_score(fit, symmetry, xa / (4.0 * atrNow)), why, goal)
+            // Rename the same chronological points O,X,A,B,C for this template.
+            // AX/OX=ab/xa; AB/XA=bc/ab; BC/AB=cd/bc; XC/OX=(a-d)/xa.
+            bool sharkTopology = x < b and b < a and c > a and d < b
+            if harm_shark and sharkTopology and f_between(rab, 0.382, 0.886, t) and f_between(rbc, 1.13, 1.618, t) and f_between(rcd, 1.618, 2.24, t) and f_between(rad, 0.886, 1.13, t)
+                float nearestCompletion = math.min(math.abs(rad - 0.886), math.abs(rad - 1.13))
+                float fit = 1.0 - nearestCompletion / (0.122 + t)
+                string why = "O-X-A-B-C: XA/OX=" + str.tostring(rab, "#.###") + "; AB/XA=" + str.tostring(rbc, "#.###") + "; BC/AB=" + str.tostring(rcd, "#.###") + "; XC/OX=" + str.tostring(rad, "#.###") + "."
+                f_harmonicRegister(prefix + "Shark (OXABC)", direction, n - 5, f_score(fit, symmetry, xa / (4.0 * atrNow)), why, goal)
+    true
+
+// ============================================================================
+// 7. CURVED / SPECIAL STRUCTURES
+// ============================================================================
+// Fit 11 equally spaced OBSERVED closes to q2*x^2 + q1*x + q0, x in [-1,1].
+// Centering prices avoids subtracting large absolute quote values in regression.
+// Returns actual sampled vertices, never fabricated visual evidence.
+f_curve(int firstBar, int lastBar) =>
+    array<int> xs = array.new_int()
+    array<float> ys = array.new_float()
+    float q2 = na
+    float q1 = na
+    float q0 = na
+    float relativeError = na
+    float vertex = na
+    float firstPrice = na
+    float lastPrice = na
+    bool ready = lastBar - firstBar >= 10 and firstBar >= 0 and bar_index - firstBar <= 1000 and lastBar <= bar_index
+    if ready
+        float anchor = close[bar_index - firstBar]
+        float sy = 0.0
+        float sx2 = 0.0
+        float sx4 = 0.0
+        float sxy = 0.0
+        float sx2y = 0.0
+        for j = 0 to 10
+            int xBar = firstBar + int(math.round((lastBar - firstBar) * j / 10.0))
+            float u = -1.0 + j * 0.2
+            float y = close[bar_index - xBar]
+            array.push(xs, xBar)
+            array.push(ys, y)
+            float centered = y - anchor
+            sy += centered
+            sx2 += u * u
+            sx4 += u * u * u * u
+            sxy += u * centered
+            sx2y += u * u * centered
+        float denominator = 11.0 * sx4 - sx2 * sx2
+        q2 := (11.0 * sx2y - sx2 * sy) / denominator
+        q1 := sxy / sx2
+        q0 := (sy - q2 * sx2) / 11.0 + anchor
+        float sse = 0.0
+        for j = 0 to 10
+            float u = -1.0 + j * 0.2
+            float residual = array.get(ys, j) - (q2 * u * u + q1 * u + q0)
+            sse += residual * residual
+        relativeError := math.abs(q2) > tick ? math.sqrt(sse / 11.0) / math.abs(q2) : na
+        vertex := math.abs(q2) > tick ? -q1 / (2.0 * q2) : na
+        firstPrice := array.get(ys, 0)
+        lastPrice := array.get(ys, 10)
+    [q2, q1, q0, relativeError, vertex, firstPrice, lastPrice, xs, ys]
+
+// A sharp V can have a deceptively small quadratic residual. Require distributed
+// curvature: at least 5 of the 9 interior sample bends agree with the U/inverted-U.
+f_curveSmooth(array<float> ys, int direction, float depth) =>
+    int agreeing = 0
+    float worstBend = 0.0
+    if array.size(ys) == 11 and depth > tick
+        for j = 1 to 9
+            float bend = direction * (array.get(ys, j - 1) - 2.0 * array.get(ys, j) + array.get(ys, j + 1))
+            if bend >= 0.01 * depth
+                agreeing += 1
+            worstBend := math.max(worstBend, math.abs(bend))
+    agreeing >= 5 and worstBend <= depth * 0.40
+
+f_rounding() =>
+    int span = math.min(roundLength, lookback - 1)
+    if detect_classic and classic_rounding and bar_index > span + atrLength
+        int start = bar_index - span - 1
+        int finish = bar_index - 1
+        [q2, q1, q0, error, vertex, firstPrice, lastPrice, xs, ys] = f_curve(start, finish)
+        float depth = math.abs(q2)
+        if not na(error) and depth >= minHeightATR * atrNow and math.abs(vertex) <= 0.25 and error <= curveMaxError and math.abs(firstPrice - lastPrice) <= depth * 0.4 and f_curveSmooth(ys, q2 > 0.0 ? 1 : -1, depth)
+            int direction = q2 > 0.0 ? 1 : -1
+            float extreme = direction == 1 ? array.min(ys) : array.max(ys)
+            float rim = direction == 1 ? math.max(firstPrice, lastPrice) : math.min(firstPrice, lastPrice)
+            float quality = f_score(1.0 - error / curveMaxError, 1.0 - math.abs(vertex) / 0.25, depth / (4.0 * atrNow))
+            string why = "11 observed closes; quadratic curvature " + str.tostring(q2 / atrNow, "#.##") + " ATR; RMS/depth " + str.tostring(error, "#.###") + "; vertex x=" + str.tostring(vertex, "#.##") + ". Heuristic, not an exhaustive rounding recognizer."
+            f_register(direction == 1 ? "Rounding Bottom" : "Rounding Top", "Curve", direction, start, finish, finish, direction == 1 ? rim : extreme, 0.0, direction == -1 ? rim : extreme, 0.0, extreme - direction * stopPadATR * atrNow, depth, na, quality, why, xs, ys, pendingBars)
+    true
+
+f_cupAndV() =>
+    int n = array.size(swings)
+    if detect_special and spec_cup and n >= 4
+        Swing left = array.get(swings, n - 4)
+        Swing bottom = array.get(swings, n - 3)
+        Swing right = array.get(swings, n - 2)
+        Swing handle = array.get(swings, n - 1)
+        int direction = left.side
+        float cupDepth = direction * ((left.y + right.y) * 0.5 - bottom.y)
+        float handleDepth = direction * (right.y - handle.y)
+        int cupBars = right.x - left.x
+        int handleBars = handle.x - right.x
+        bool basic = bar_index - left.x <= lookback and cupBars >= minCupBars and handleBars >= minPivotGap and handleBars <= cupBars * 0.5 and cupDepth >= minHeightATR * atrNow and handleDepth > tick and handleDepth <= cupDepth * 0.5 and math.abs(left.y - right.y) <= math.max(levelTolATR * atrNow, cupDepth * 0.15)
+        if basic
+            [q2, q1, q0, error, vertex, firstPrice, lastPrice, cx, cy] = f_curve(left.x, right.x)
+            if not na(error) and q2 * direction > 0.0 and math.abs(vertex) <= 0.35 and error <= curveMaxError and f_curveSmooth(cy, direction, math.abs(q2))
+                // The evidence line contains actual cup samples AND the actual handle pivot.
+                array.push(cx, handle.x)
+                array.push(cy, handle.y)
+                float rim = direction == 1 ? math.max(left.y, right.y) : math.min(left.y, right.y)
+                float quality = f_score(1.0 - error / curveMaxError, 1.0 - math.abs(vertex) / 0.35, cupDepth / (4.0 * atrNow))
+                string why = "Rounded 11-sample cup; rim mismatch " + str.tostring(math.abs(left.y - right.y) / atrNow, "#.##") + " ATR; handle/cup depth " + str.tostring(handleDepth / cupDepth, "#.##") + "; handle duration <= 50% of cup."
+                f_register(direction == 1 ? "Cup & Handle" : "Inverse Cup & Handle", "Special", direction, left.x, handle.x, handle.x, direction == 1 ? rim : handle.y, 0.0, direction == -1 ? rim : handle.y, 0.0, handle.y - direction * stopPadATR * atrNow, cupDepth, na, quality, why, cx, cy, pendingBars)
+    if detect_special and spec_vbottom and n >= 3
+        Swing a = array.get(swings, n - 3)
+        Swing b = array.get(swings, n - 2)
+        Swing c = array.get(swings, n - 1)
+        int direction = a.side
+        float decline = direction * (a.y - b.y)
+        float recovery = direction * (c.y - b.y)
+        int leg1 = b.x - a.x
+        int leg2 = c.x - b.x
+        float balance = f_balance(leg1, leg2)
+        bool sharp = leg1 > 0 and leg2 > 0 and c.x - a.x <= 30 and decline >= poleMinATR * atrNow and recovery >= decline * 0.85 and recovery <= decline * 1.15 and decline / leg1 >= 0.25 * atrNow and recovery / leg2 >= 0.25 * atrNow
+        if sharp and balance >= 1.0 / maxTimeRatio
+            [xs, ys] = f_vertices(n - 3, n - 1)
+            float rim = direction == 1 ? math.max(a.y, c.y) : math.min(a.y, c.y)
+            float quality = f_score(1.0 - math.abs(recovery / decline - 1.0) / 0.15, balance, decline / (5.0 * atrNow))
+            string why = "Sharp two-leg V; recovery/first leg " + str.tostring(recovery / decline, "#.##") + "; both speeds >= 0.25 ATR/bar. Rim break is required, not a claim of profitable reversal."
+            f_register(direction == 1 ? "V-Bottom" : "V-Top", "Special", direction, a.x, c.x, c.x, direction == 1 ? rim : b.y, 0.0, direction == -1 ? rim : b.y, 0.0, b.y - direction * stopPadATR * atrNow, decline, na, quality, why, xs, ys, pendingBars)
+    true
+
+f_diamond() =>
+    int n = array.size(swings)
+    if detect_special and spec_diamond and n >= 8
+        int first = n - 8
+        Swing a = array.get(swings, first)
+        Swing middle = array.get(swings, first + 4)
+        Swing z = array.get(swings, n - 1)
+        if bar_index - a.x <= lookback
+            [u0, us0, er0, worst0, nh0] = f_fitBoundary(first, first + 3, 1, a.x)
+            [l0, ls0, er1, worst1, nl0] = f_fitBoundary(first, first + 3, -1, a.x)
+            [u1, us1, er2, worst2, nh1] = f_fitBoundary(first + 4, n - 1, 1, middle.x)
+            [l1, ls1, er3, worst3, nl1] = f_fitBoundary(first + 4, n - 1, -1, middle.x)
+            Swing leftEnd = array.get(swings, first + 3)
+            float startWidth = u0 - l0
+            float middleWidthL = f_y(u0, us0, a.x, leftEnd.x) - f_y(l0, ls0, a.x, leftEnd.x)
+            float middleWidthR = u1 - l1
+            float finishWidth = f_y(u1, us1, middle.x, z.x) - f_y(l1, ls1, middle.x, z.x)
+            float peakWidth = math.max(middleWidthL, middleWidthR)
+            bool widening = us0 > 0.0 and ls0 < 0.0 and middleWidthL >= startWidth * 1.2
+            bool narrowing = us1 < 0.0 and ls1 > 0.0 and finishWidth <= middleWidthR * 0.8
+            float upperJoinError = math.abs(f_y(u0, us0, a.x, middle.x) - u1)
+            float lowerJoinError = math.abs(f_y(l0, ls0, a.x, middle.x) - l1)
+            bool joins = peakWidth > tick and math.abs(middleWidthL - middleWidthR) / peakWidth <= 0.4 and math.max(upperJoinError, lowerJoinError) <= peakWidth * 0.35
+            if widening and narrowing and joins and startWidth > tick and finishWidth > tick and peakWidth >= minHeightATR * atrNow
+                [xs, ys] = f_vertices(first, n - 1)
+                float quality = f_score(1.0 - math.abs(middleWidthL - middleWidthR) / (peakWidth * 0.4), f_balance(leftEnd.x - a.x, z.x - middle.x), peakWidth / (5.0 * atrNow))
+                string why = "Eight chronological pivots; expanding left half and contracting right half. Width continuity error " + str.tostring(math.abs(middleWidthL - middleWidthR) / peakWidth, "#.##") + ". Two touches per half/side; heuristic template."
+                f_register("Diamond", "Special", 0, a.x, z.x, middle.x, u1, us1, l1, ls1, na, peakWidth, na, quality, why, xs, ys, pendingBars)
+    true
+
+f_islands() =>
+    if detect_special and spec_island and bar_index > 7
+        bool found = false
+        for length = 1 to 5
+            if not found
+                float islandHigh = high[1]
+                float islandLow = low[1]
+                for j = 1 to length
+                    islandHigh := math.max(islandHigh, high[j])
+                    islandLow := math.min(islandLow, low[j])
+                float requiredGap = math.max(tick, islandGapATR * atrNow)
+                float lowerCommonGap = math.min(low[length + 1], low) - islandHigh
+                float upperCommonGap = islandLow - math.max(high[length + 1], high)
+                bool bottom = lowerCommonGap >= requiredGap
+                bool top = upperCommonGap >= requiredGap
+                if bottom or top
+                    int direction = bottom ? 1 : -1
+                    float gap = bottom ? lowerCommonGap : upperCommonGap
+                    float height = math.max(islandHigh - islandLow, atrNow * 2.0)
+                    array<int> xs = array.from(bar_index - length - 1, bar_index - length, bar_index - 1, bar_index)
+                    array<float> ys = array.from(bottom ? low[length + 1] : high[length + 1], bottom ? high[length] : low[length], bottom ? high[1] : low[1], bottom ? low : high)
+                    float quality = f_score(f_clamp(gap / (atrNow * 0.5), 0.0, 1.0), 1.0, height / (3.0 * atrNow))
+                    float invalidation = bottom ? islandLow - stopPadATR * atrNow : islandHigh + stopPadATR * atrNow
+                    float goal = close + direction * height
+                    string why = "Actual non-overlapping OHLC gaps on BOTH sides of " + str.tostring(length) + " island bar(s); shared gap=" + str.tostring(gap / atrNow, "#.##") + " ATR. Goal is a reference range projection from recognition close."
+                    found := f_register(bottom ? "Island Bottom" : "Island Top", "Special", direction, bar_index - length - 1, bar_index, bar_index, islandHigh, 0.0, islandLow, 0.0, invalidation, height, goal, quality, why, xs, ys, 5)
+    true
+
+// ============================================================================
+// 8. PRICE ACTION: independent families, proper doji anatomy and prior context
+// ============================================================================
+f_candleRegister(string name, int bias, int span, float upper, float lower, float quality, string reason) =>
+    array<int> xs = array.from(bar_index - span, bar_index)
+    array<float> ys = array.from(upper, lower)
+    float invalidation = bias == 1 ? lower - stopPadATR * atrNow : bias == -1 ? upper + stopPadATR * atrNow : na
+    f_register(name, "Price Action", bias, bar_index - span, bar_index, bar_index, upper, 0.0, lower, 0.0, invalidation, upper - lower, na, quality, reason + " Direction requires a later CLOSED-bar break of the stored range.", xs, ys, math.min(pendingBars, 8))
+
+f_priceAction() =>
+    if detect_price_action and bar_index > contextLength + 2
+        float candleRange = high - low
+        float body = math.abs(close - open)
+        float previousBody = math.abs(close[1] - open[1])
+        float upperWick = high - math.max(open, close)
+        float lowerWick = math.min(open, close) - low
+        bool downContext = close[1] < emaContext[1] and emaContext[1] < emaContext[contextLength + 1] and close[contextLength + 1] - close[1] >= 0.75 * atrNow
+        bool upContext = close[1] > emaContext[1] and emaContext[1] > emaContext[contextLength + 1] and close[1] - close[contextLength + 1] >= 0.75 * atrNow
+        if candleRange >= math.max(tick * 2.0, minCandleATR * atrNow)
+            float bodyFraction = body / candleRange
+            float lowerFraction = lowerWick / candleRange
+            float upperFraction = upperWick / candleRange
+            float prominence = candleRange / (2.0 * atrNow)
+            bool isDoji = bodyFraction <= 0.10
+            // Inside/outside and engulfing are independent. Enabling one never masks another.
+            if pa_inside and high < high[1] and low > low[1] and high[1] - low[1] > tick
+                float contraction = 1.0 - candleRange / (high[1] - low[1])
+                f_candleRegister("Inside Bar", 0, 1, high[1], low[1], f_score(contraction, 1.0, prominence), "Strictly inside the mother bar; mother range retained. Contraction=" + str.tostring(contraction * 100.0, "#") + "%.")
+            if pa_outside and high > high[1] and low < low[1]
+                float expansion = f_clamp((candleRange / math.max(high[1] - low[1], tick) - 1.0), 0.0, 1.0)
+                f_candleRegister("Outside Bar", 0, 1, high, low, f_score(expansion, 1.0, prominence), "Current high and low strictly exceed the prior full range; no assumed direction.")
+            if pa_engulfing and previousBody > tick and body >= previousBody * 1.05
+                bool bullEngulf = close[1] < open[1] and close > open and open <= close[1] and close >= open[1]
+                bool bearEngulf = close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
+                float fit = f_clamp((body / previousBody - 1.0) / 1.5, 0.0, 1.0)
+                if bullEngulf
+                    f_candleRegister("Bullish Engulfing", 1, 1, high, math.min(low, low[1]), f_score(fit, downContext ? 1.0 : 0.5, prominence), "Opposite candle colors; current real body covers the prior real body. Prior down-context=" + str.tostring(downContext) + ".")
+                if bearEngulf
+                    f_candleRegister("Bearish Engulfing", -1, 1, math.max(high, high[1]), low, f_score(fit, upContext ? 1.0 : 0.5, prominence), "Opposite candle colors; current real body covers the prior real body. Prior up-context=" + str.tostring(upContext) + ".")
+            if pa_doji and isDoji
+                string dojiName = "Doji"
+                int bias = 0
+                if lowerFraction >= 0.60 and upperFraction <= 0.15
+                    dojiName := "Dragonfly Doji"
+                    bias := downContext ? 1 : 0
+                else if upperFraction >= 0.60 and lowerFraction <= 0.15
+                    dojiName := "Gravestone Doji"
+                    bias := upContext ? -1 : 0
+                float quality = f_score(1.0 - bodyFraction / 0.10, 1.0, prominence)
+                f_candleRegister(dojiName, bias, 0, high, low, quality, "Body/range=" + str.tostring(bodyFraction, "#.##") + "; lower wick/range=" + str.tostring(lowerFraction, "#.##") + "; upper wick/range=" + str.tostring(upperFraction, "#.##") + ". Anatomy, not a reversal guarantee.")
+            bool lowerPin = not isDoji and bodyFraction <= 0.35 and lowerFraction >= 0.60 and upperFraction <= 0.15
+            bool upperPin = not isDoji and bodyFraction <= 0.35 and upperFraction >= 0.60 and lowerFraction <= 0.15
+            if pa_pin_bar
+                if lowerPin
+                    f_candleRegister("Lower-Wick Pin Bar", 0, 0, high, low, f_score(lowerFraction, 1.0 - upperFraction, prominence), "Dominant LOWER wick and non-doji body. Morphology-only: breakout direction unassigned; no untested support claim.")
+                if upperPin
+                    f_candleRegister("Upper-Wick Pin Bar", 0, 0, high, low, f_score(upperFraction, 1.0 - lowerFraction, prominence), "Dominant UPPER wick and non-doji body. Morphology-only: breakout direction unassigned; no untested resistance claim.")
+            // Contextual names are evaluated separately and do not disappear when Pin Bar is on.
+            if pa_hammer and not isDoji
+                bool hammerShape = lowerWick >= body * 2.0 and upperFraction <= 0.15 and bodyFraction <= 0.35
+                bool invertedShape = upperWick >= body * 2.0 and lowerFraction <= 0.15 and bodyFraction <= 0.35
+                if hammerShape and downContext
+                    f_candleRegister("Hammer", 1, 0, high, low, f_score(lowerFraction, 1.0, prominence), "Lower wick >= 2x real body; PRIOR downtrend confirmed by prior-close displacement and EMA slope.")
+                if hammerShape and upContext
+                    f_candleRegister("Hanging Man", -1, 0, high, low, f_score(lowerFraction, 1.0, prominence), "Lower wick >= 2x real body; PRIOR uptrend. Bearish confirmation must break the stored low.")
+                if invertedShape and downContext
+                    f_candleRegister("Inverted Hammer", 1, 0, high, low, f_score(upperFraction, 1.0, prominence), "Upper wick >= 2x body after PRIOR downtrend. Bullish confirmation must break the stored high.")
+                if invertedShape and upContext
+                    f_candleRegister("Shooting Star", -1, 0, high, low, f_score(upperFraction, 1.0, prominence), "Upper wick >= 2x body after PRIOR uptrend; bearish confirmation is separate.")
+    true
+
+// ============================================================================
+// 9. LIFECYCLE: no retroactive entries, no same-signal-bar target/stop accounting
+// ============================================================================
+f_finish(Pattern p, int state, string note) =>
+    p.state := state
+    p.finishedAt := bar_index
+    p.evidence += " " + note
+    f_event(p, state)
+    true
+
+f_updateLifecycle(bool onlyNew) =>
+    if array.size(registry) > 0
+        for p in registry
+            if p.state <= 1 and (not onlyNew or p.born == bar_index)
+                float upperNow = f_y(p.upper, p.upperSlope, p.baseX, bar_index)
+                float lowerNow = f_y(p.lower, p.lowerSlope, p.baseX, bar_index)
+                float padding = p.formationATR * stopPadATR
+                float buffer = p.formationATR * breakBufferATR
+                if p.state == 0
+                    bool expired = bar_index - p.born >= p.validBars
+                    bool crossedLines = upperNow <= lowerNow
+                    // Before confirmation, invalidation is CLOSE-based. After it, use OHLC touches.
+                    float bullInvalid = not na(p.invalidation) ? p.invalidation : lowerNow - padding
+                    float bearInvalid = not na(p.invalidation) ? p.invalidation : upperNow + padding
+                    bool invalid = p.bias == 1 ? close < bullInvalid : p.bias == -1 ? close > bearInvalid : false
+                    if expired or crossedLines
+                        f_finish(p, 4, crossedLines ? "Projected boundaries met/crossed before confirmation." : "Pending lifetime exhausted.")
+                    else if invalid
+                        f_finish(p, 3, "Close invalidated the structure BEFORE confirmation; not a trade loss.")
+                    else
+                        bool priceActionCanTrigger = p.family != "Price Action" or bar_index > p.born
+                        bool bullishBreak = (p.bias == 0 or p.bias == 1) and close > upperNow + buffer
+                        bool bearishBreak = (p.bias == 0 or p.bias == -1) and close < lowerNow - buffer
+                        bool volumeOK = not volumeFilter or (not na(volume) and not na(previousVolumeMean) and previousVolumeMean > 0.0 and volume >= previousVolumeMean * volumeMultiple)
+                        if priceActionCanTrigger and volumeOK and (bullishBreak or bearishBreak)
+                            int direction = bullishBreak ? 1 : -1
+                            float boundary = direction == 1 ? upperNow : lowerNow
+                            float referenceStop = f_roundLevel(not na(p.invalidation) ? p.invalidation : (direction == 1 ? lowerNow - padding : upperNow + padding))
+                            float referenceTarget = f_roundLevel(not na(p.fixedGoal) ? p.fixedGoal : boundary + direction * p.height)
+                            float risk = direction * (close - referenceStop)
+                            float reward = direction * (referenceTarget - close)
+                            float rr = risk > tick ? reward / risk : na
+                            if risk <= tick or reward <= tick or (not na(rr) and rr < minRR)
+                                f_finish(p, 6, "Recognition was too late, risk geometry invalid, or reference R/R below the configured minimum. No signal backdated.")
+                            else
+                                p.state := 1
+                                p.direction := direction
+                                p.confirmedAt := bar_index
+                                p.entry := close
+                                p.stop := referenceStop
+                                p.target := referenceTarget
+                                p.rr := rr
+                                f_assessSignal(p, boundary)
+                                // Thresholds are frozen ON THIS recognition bar, not at an old vertex.
+                                f_event(p, 1)
+                else if p.state == 1 and bar_index > p.confirmedAt
+                    bool targetTouched = p.direction == 1 ? high >= p.target : low <= p.target
+                    bool stopTouched = p.direction == 1 ? low <= p.stop : high >= p.stop
+                    if targetTouched and stopTouched
+                        f_finish(p, 5, "Both frozen barriers touched in one subsequent OHLC bar. Intrabar order unknown; not counted as a win.")
+                    else if stopTouched
+                        f_finish(p, 3, "Frozen invalidation touched AFTER confirmation. This is an observed barrier event, not simulated execution.")
+                    else if targetTouched
+                        f_finish(p, 2, "Frozen target projection touched AFTER the confirmation bar. No transaction costs/fills modeled.")
+                    else if bar_index - p.confirmedAt >= trackingBars
+                        f_finish(p, 4, "Post-confirmation observation lifetime exhausted.")
+    true
+
+// ============================================================================
+// 10A. BOUNDED EVENT MARKERS: grades and pattern-linked exit observations
+// ============================================================================
+f_evidenceText(Pattern p) =>
+    string volumeText = p.volumeAvailable ? str.tostring(15.0 * p.volumeQuality, "#.##") + "/15; feed relative volume=" + str.tostring(p.relativeVolume, "#.##") + "x" : "N/A (missing/disabled); available weight 85; A+ unavailable"
+    string result = "Shape /100=" + str.tostring(p.score, "#.#") + " -> " + str.tostring(0.40 * p.score, "#.##") + "/40"
+    result += "\nConfirmation=" + str.tostring(30.0 * p.confirmQuality, "#.##") + "/30; clearance beyond buffer=" + str.tostring(p.clearanceATR, "#.##") + " ATR"
+    result += "\nVolume=" + volumeText + "\nR/R=" + str.tostring(p.rr, "#.##") + " -> " + str.tostring(15.0 * p.rrQuality, "#.##") + "/15"
+    result += "\nGrade=" + f_gradeName(p.grade) + "; setup score=" + str.tostring(p.strength, "#.#") + "/100. NOT win probability."
+    result
+
+f_eventLabel(int x, float y, string caption, color hue, string style, string textSize, string tooltip) =>
+    while array.size(eventLabels) >= eventLabelLimit
+        label.delete(array.shift(eventLabels))
+    if not na(x) and not na(y)
+        label id = label.new(x, y, caption, xloc=xloc.bar_index, yloc=yloc.price, color=hue, style=style, textcolor=color.white, size=textSize, tooltip=tooltip)
+        array.push(eventLabels, id)
+    true
+
+f_renderEventMarkers() =>
+    if array.size(eventCodes) > 0
+        for i = 0 to array.size(eventCodes) - 1
+            Pattern p = array.get(eventPatterns, i)
+            int code = array.get(eventCodes, i)
+            if code == 1 and p.representative and show_signals and (p.signalSelected or showWeakSignals)
+                bool weak = not p.signalSelected
+                string textSize = weak ? size.tiny : p.grade == 1 ? size.small : p.grade == 2 ? size.normal : size.large
+                color hue = weak ? color.new(color.gray, 78) : color.new(f_color(p.direction), p.grade == 1 ? 35 : p.grade == 2 ? 12 : 0)
+                string style = weak ? label.style_circle : p.direction == 1 ? label.style_label_up : label.style_label_down
+                int x = not na(p.confirmedAt) ? p.confirmedAt : bar_index
+
+                // SIGNAL layer: always outside the confirmation candle. Exact entry stays
+                // frozen in p.entry and is shown by the REF level/tooltip, not by moving
+                // the price itself. Pattern-label collision handling remains secondary.
+                float signalOffset = math.max(tick * 4.0, p.formationATR * signalLabelOffsetATR)
+                float y = p.direction == 1 ? low - signalOffset : high + signalOffset
+                bool explanationAbove = p.bias == -1 or (p.bias == 0 and p.direction == -1)
+                bool signalAbove = p.direction == -1
+                if show_pattern_labels and explanationAbove == signalAbove and math.abs(x - p.born) <= 2
+                    float explanationBoundary = explanationAbove ? f_y(p.upper, p.upperSlope, p.baseX, p.born) : f_y(p.lower, p.lowerSlope, p.baseX, p.born)
+                    float explanationOffset = p.formationATR * patternLabelOffsetATR
+                    float explanationY = explanationAbove ? explanationBoundary + explanationOffset : explanationBoundary - explanationOffset
+                    float requiredGap = math.max(tick * 8.0, p.formationATR * signalPatternGapATR)
+                    if math.abs(y - explanationY) < requiredGap
+                        y := signalAbove ? explanationY + requiredGap : explanationY - requiredGap
+
+                // Weak/watch markers carry no chart text. Selected signals retain only the
+                // actionable direction + grade/score and the stable P reference.
+                string caption = weak ? "" : (p.direction == 1 ? "LONG " : "SHORT ") + f_gradeName(p.grade) + str.tostring(p.strength, "#") + "\n" + f_ref(p)
+                string tooltip = (weak ? "WATCH ONLY: below minimum signal grade.\nGrade=" + f_gradeName(p.grade) + "\n" : "SELECTED REFERENCE SETUP, not an executed order.\n") + f_ref(p) + " | " + p.name + "\n" + f_evidenceText(p)
+                tooltip += "\nReference close=" + f_price(p.entry) + "\nTP / profit reference=" + f_price(p.target) + "\nSL / invalidation reference=" + f_price(p.stop) + "\nConfirmed bar=" + str.tostring(p.confirmedAt) + "\nID=" + p.key
+                f_eventLabel(x, y, caption, hue, style, textSize, tooltip)
+
+            else if code > 1 and f_isSelectedExit(p, code) and showExitEvents
+                // EXIT layer: compact chart tag; all numeric/detail text moves to tooltip.
+                string kind = f_exitKind(p, code)
+                string caption = code == 2 ? "TP" : code == 3 ? "SL" : code == 5 ? "TP/SL ?" : "TIME"
+                int x = not na(p.finishedAt) ? p.finishedAt : bar_index
+                float markerOffset = math.max(tick * 4.0, p.formationATR * 0.12)
+                bool markerAbove = code == 2 ? p.direction == 1 : code == 3 ? p.direction == -1 : true
+                float y = markerAbove ? high + markerOffset : low - markerOffset
+                color hue = code == 2 ? color.teal : code == 3 ? color.red : color.orange
+                string style = markerAbove ? label.style_label_down : label.style_label_up
+                string tooltip = f_ref(p) + " | " + p.name + "\n" + kind + " observed at bar close; NOT a fill price."
+                tooltip += "\nTP=" + f_price(p.target) + "; SL=" + f_price(p.stop) + "; reference=" + f_price(p.entry) + "\nEntry grade=" + f_gradeName(p.grade) + " (frozen)."
+                tooltip += code == 5 ? "\nBoth levels touched in the same OHLC bar. Intrabar order is unknown." : code == 4 ? "\nTracking ended. Review an open position; this is NOT an automatic time exit." : "\nThe level may have been crossed intrabar or gapped through. Place/manage protective orders separately."
+                f_eventLabel(x, y, caption, color.new(hue, 12), style, size.tiny, tooltip)
+    true
+
+// ============================================================================
+// 10. CONFIRMED-BAR EXECUTION
+// ============================================================================
+array.clear(eventJSON)
+array.clear(eventCodes)
+array.clear(eventDirections)
+array.clear(eventPatterns)
+bool changedSwing = false
+bool bullEvent = false
+bool bearEvent = false
+bool shapeEvent = false
+bool terminalEvent = false
+bool targetExitEvent = false
+bool stopExitEvent = false
+bool ambiguousExitEvent = false
+bool timeReviewEvent = false
+bool strongBullEvent = false
+bool strongBearEvent = false
+float bullStrength = na
+float bearStrength = na
+
+if barstate.isconfirmed and warmed and chart.is_standard
+    // The maximum time a vertex can be rediscovered is bounded by lookback.
+    while array.size(seenKeys) > 0
+        int recordedAt = array.get(seenAt, 0)
+        if bar_index - recordedAt > lookback + 2 * pivotLen + 5
+            string oldKey = array.shift(seenKeys)
+            array.shift(seenAt)
+            map.remove(seen, oldKey)
+        else
+            break
+    // Resolve existing states BEFORE registering new overlapping structures.
+    f_updateLifecycle(false)
+    // Both extrema on the same bar have no known intrabar order. Do not invent it.
+    if not na(pivotHigh) and na(pivotLow)
+        changedSwing := f_pushSwing(bar_index - pivotLen, pivotHigh, 1, atrNow[pivotLen])
+    else if not na(pivotLow) and na(pivotHigh)
+        changedSwing := f_pushSwing(bar_index - pivotLen, pivotLow, -1, atrNow[pivotLen])
+    if changedSwing
+        f_classic()
+        f_boundaries()
+        f_harmonics()
+        f_cupAndV()
+        f_diamond()
+        f_rounding()
+    f_priceAction()
+    f_islands()
+    // New structures may already be beyond a level due to pivot confirmation lag.
+    // They are recognized NOW at current close, never entered at the historic level.
+    // Existing confirmed/finished states cannot create duplicate confirmation events.
+    f_updateLifecycle(true)
+    f_selectRepresentatives()
+    f_dispatchEvents()
+    f_renderEventMarkers()
+    if array.size(eventCodes) > 0
+        for i = 0 to array.size(eventCodes) - 1
+            int code = array.get(eventCodes, i)
+            int direction = array.get(eventDirections, i)
+            Pattern p = array.get(eventPatterns, i)
+            shapeEvent := shapeEvent or code == 0
+            bool selectedConfirmation = code == 1 and p.signalSelected
+            bullEvent := bullEvent or (selectedConfirmation and direction == 1)
+            bearEvent := bearEvent or (selectedConfirmation and direction == -1)
+            strongBullEvent := strongBullEvent or (selectedConfirmation and direction == 1 and p.grade >= 2)
+            strongBearEvent := strongBearEvent or (selectedConfirmation and direction == -1 and p.grade >= 2)
+            if selectedConfirmation and direction == 1
+                bullStrength := p.strength
+            if selectedConfirmation and direction == -1
+                bearStrength := p.strength
+            bool selectedExit = f_isSelectedExit(p, code)
+            targetExitEvent := targetExitEvent or (selectedExit and code == 2)
+            stopExitEvent := stopExitEvent or (selectedExit and code == 3)
+            ambiguousExitEvent := ambiguousExitEvent or (selectedExit and code == 5)
+            timeReviewEvent := timeReviewEvent or (selectedExit and code == 4)
+            terminalEvent := terminalEvent or code > 1
+    if array.size(eventJSON) > 0
+        // One aggregated alert per closed bar, instead of losing simultaneous detections.
+        // Cap only payload size, not internal detection/event processing; disclose omissions.
+        string items = ""
+        int included = 0
+        for item in eventJSON
+            if str.length(items) + str.length(item) <= 18000
+                items += (included == 0 ? "" : ",") + item
+                included += 1
+        string payload = "{\"schema\":\"pattern-engine/2.1.3\",\"symbol\":\"" + f_escape(syminfo.tickerid) + "\",\"timeframe\":\"" + f_escape(timeframe.period) + "\",\"bar_close_time\":" + (na(time_close) ? "null" : str.tostring(time_close)) + ",\"events\":[" + items + "],\"omitted_events\":" + str.tostring(array.size(eventJSON) - included) + "}"
+        alert(payload, alert.freq_once_per_bar_close)
+
+// Historical markers are bounded dynamic labels with frozen grades and TP/SL tooltips.
+// Data-window events are series; marker-history eviction is not signal backdating.
+plot(show_pivot_points and barstate.isconfirmed ? pivotHigh : na, title="Raw confirmed pivot HIGH (known right-bars later)", color=color.new(color.red, 20), linewidth=2, style=plot.style_circles, offset=-pivotLen)
+plot(show_pivot_points and barstate.isconfirmed ? pivotLow : na, title="Raw confirmed pivot LOW (known right-bars later)", color=color.new(color.lime, 20), linewidth=2, style=plot.style_circles, offset=-pivotLen)
+plot(bullEvent ? 1 : 0, title="New selected bullish confirmation", display=display.data_window)
+plot(bearEvent ? 1 : 0, title="New selected bearish confirmation", display=display.data_window)
+plot(bullStrength, title="Selected bullish setup score (not probability)", display=display.data_window)
+plot(bearStrength, title="Selected bearish setup score (not probability)", display=display.data_window)
+
+alertcondition(bullEvent, title="PE | Bullish confirmation (minimum grade)", message="PE 2.1.3: selected bullish CLOSED-BAR setup on {{ticker}} {{interval}}. Inspect the matching P reference for TP/SL. Not an order.")
+alertcondition(bearEvent, title="PE | Bearish confirmation (minimum grade)", message="PE 2.1.3: selected bearish CLOSED-BAR setup on {{ticker}} {{interval}}. Inspect the matching P reference for TP/SL. Not an order.")
+alertcondition(bullEvent or bearEvent, title="PE | Any confirmation (minimum grade)", message="PE 2.1.3: selected setup confirmed on {{ticker}} {{interval}}. Grade is NOT probability.")
+alertcondition(strongBullEvent, title="PE | A / A+ bullish setup", message="PE 2.1.3: A or A+ bullish reference setup on {{ticker}} {{interval}}. Not a win-rate claim.")
+alertcondition(strongBearEvent, title="PE | A / A+ bearish setup", message="PE 2.1.3: A or A+ bearish reference setup on {{ticker}} {{interval}}. Not a win-rate claim.")
+alertcondition(targetExitEvent, title="PE | TP reference touched", message="PE 2.1.3: a SELECTED setup touched its saved TP reference on {{ticker}} {{interval}}. Observed at bar close, not a fill. Check P reference.")
+alertcondition(stopExitEvent, title="PE | SL reference touched", message="PE 2.1.3: a SELECTED setup touched its saved SL reference on {{ticker}} {{interval}}. Observed at bar close, not a broker stop order. Check P reference.")
+alertcondition(ambiguousExitEvent, title="PE | TP and SL same bar - unresolved", message="PE 2.1.3: both TP and SL references touched in one bar on {{ticker}} {{interval}}. Intrabar order unknown. Check P reference.")
+alertcondition(timeReviewEvent, title="PE | Tracking expired - review position", message="PE 2.1.3: selected-setup tracking expired on {{ticker}} {{interval}}. Position REVIEW, not automatic liquidation.")
+alertcondition(shapeEvent, title="PE | New shape (not a signal)", message="PE 2.1.3: new shape recognized on {{ticker}} {{interval}}. Await confirmation and evidence grade.")
+alertcondition(terminalEvent, title="PE | All terminal observations", message="PE 2.1.3: pattern observation ended on {{ticker}} {{interval}}. May be pre-confirmation or unselected; not necessarily an exit.")
+
+// ============================================================================
+// 11. BOUNDED DRAWINGS / PERSISTENT TABLES
+// ============================================================================
+f_line(int x1, float y1, int x2, float y2, color hue, string style, int width) =>
+    // Very old terminal records may outlive the bar-index drawing horizon.
+    bool inRange = x1 >= bar_index - 9999 and x2 >= bar_index - 9999 and x1 <= bar_index + 500 and x2 <= bar_index + 500
+    if inRange and not na(y1) and not na(y2)
+        line id = line.new(x1, y1, x2, y2, xloc=xloc.bar_index, color=hue, style=style, width=width)
+        array.push(drawLines, id)
+    true
+
+f_label(int x, float y, string caption, color hue, string style, string textSize) =>
+    bool inRange = x >= bar_index - 9999 and x <= bar_index + 500
+    if inRange and not na(y)
+        label id = label.new(x, y, caption, xloc=xloc.bar_index, style=style, color=color.new(hue, 15), textcolor=color.white, size=textSize)
+        array.push(drawLabels, id)
+    true
+
+f_labelTip(int x, float y, string caption, color hue, string style, string textSize, string tooltip, int transparency) =>
+    bool inRange = x >= bar_index - 9999 and x <= bar_index + 500
+    if inRange and not na(y)
+        label id = label.new(x, y, caption, xloc=xloc.bar_index, style=style, color=color.new(hue, transparency), textcolor=color.white, size=textSize, tooltip=tooltip)
+        array.push(drawLabels, id)
+    true
+
+// Allocate a non-overlapping vertical lane for right-edge price labels.
+// Only the LABEL is displaced; the horizontal TP/SL/Ref line stays at the exact price.
+f_rightLabelY(int x, float desired, float gap, int preference) =>
+    float candidate = desired
+    float safeGap = math.max(gap, tick * 8.0)
+    int stepDir = preference >= 0 ? 1 : -1
+    int attempts = 0
+    bool collision = true
+    while collision and attempts < 24
+        collision := false
+        if array.size(rightLabelYs) > 0
+            for i = 0 to array.size(rightLabelYs) - 1
+                int usedX = array.get(rightLabelXs, i)
+                float usedY = array.get(rightLabelYs, i)
+                float usedGap = array.get(rightLabelGaps, i)
+                if math.abs(x - usedX) <= 2 and math.abs(candidate - usedY) < math.max(safeGap, usedGap)
+                    candidate += stepDir * math.max(safeGap, usedGap)
+                    collision := true
+                    break
+        attempts += 1
+    array.push(rightLabelXs, x)
+    array.push(rightLabelYs, candidate)
+    array.push(rightLabelGaps, safeGap)
+    candidate
+
+f_wrap(string value, int width) =>
+    array<string> words = str.split(value, " ")
+    string wrapped = ""
+    int column = 0
+    for word in words
+        int length = str.length(word)
+        if column > 0 and column + length + 1 > width
+            wrapped += "\n"
+            column := 0
+        wrapped += (column == 0 ? "" : " ") + word
+        column += length + (column == 0 ? 0 : 1)
+    wrapped
+
+f_drawPattern(Pattern p, int rank, int latestClosed) =>
+    // VISUAL HIERARCHY
+    //   1) selected signal markers (event layer, strongest)
+    //   2) selected TP/SL/REF (trade-management layer)
+    //   3) active/pending pattern boundaries
+    //   4) historical vertices / WATCH diagnostics (quietest)
+    color baseHue = f_color(p.direction)
+    bool terminal = p.state > 1
+    bool selected = p.signalSelected
+    int structureAlpha = terminal ? math.min(95, structureTransparency + 16) : selected ? math.max(0, structureTransparency - 12) : structureTransparency
+    color structureHue = color.new(baseHue, structureAlpha)
+
+    // Formation ends at the last stored pattern vertex. Projection is drawn separately;
+    // therefore a sloped boundary no longer becomes one giant dashed line from baseX
+    // through the entire chart.
+    int formationStart = math.max(p.startX, p.baseX)
+    int formationEnd = math.max(formationStart, p.endX)
+    int projectionStart = formationEnd
+    int liveProjectionEnd = latestClosed + projectionBars
+    int terminalProjectionEnd = not na(p.finishedAt) ? math.min(p.finishedAt, formationEnd + projectionBars) : formationEnd + projectionBars
+    int projectionEnd = terminal ? terminalProjectionEnd : math.max(projectionStart, liveProjectionEnd)
+
+    if show_patterns
+        if p.family == "Price Action"
+            // Stored setup range: diagnostic context only.
+            f_line(p.endX, p.upper, p.endX, p.lower, structureHue, line.style_solid, 1)
+        else if array.size(p.xs) >= 2
+            for i = 1 to array.size(p.xs) - 1
+                f_line(array.get(p.xs, i - 1), array.get(p.ys, i - 1), array.get(p.xs, i), array.get(p.ys, i), structureHue, line.style_solid, 1)
+
+        if show_pattern_labels
+            int labelX = p.born
+            float upperAtLabel = f_y(p.upper, p.upperSlope, p.baseX, labelX)
+            float lowerAtLabel = f_y(p.lower, p.lowerSlope, p.baseX, labelX)
+            bool labelAbove = p.bias == -1 or (p.bias == 0 and p.direction == -1)
+            float labelOffset = p.formationATR * (patternLabelOffsetATR + math.min(rank, 3) * patternLabelRankStepATR)
+            float labelY = labelAbove ? upperAtLabel + labelOffset : lowerAtLabel - labelOffset
+            string scoreText = show_confidence ? " | " + str.tostring(p.score, "#") : ""
+            string compactCaption = f_ref(p) + " | " + p.name + scoreText
+            string labelTip = f_ref(p) + " | " + p.name + "\nState=" + f_state(p.state) + "\nShape score=" + str.tostring(p.score, "#.#") + "/100"
+            labelTip += "\nRecognized bar=" + str.tostring(p.born) + "; last structure vertex=" + str.tostring(p.endX)
+            labelTip += "\nVertices are historical evidence, not a forecast path."
+            f_labelTip(labelX, labelY, compactCaption, baseHue, labelAbove ? label.style_label_down : label.style_label_up, size.tiny, labelTip, selected ? 28 : 48)
+
+    if show_key_levels
+        int formationAlpha = terminal ? math.min(95, formationBoundaryTransparency + 12) : selected ? math.max(0, formationBoundaryTransparency - 10) : formationBoundaryTransparency
+        int projectionAlpha = terminal ? math.min(95, projectionBoundaryTransparency + 18) : selected ? math.max(0, projectionBoundaryTransparency - 8) : projectionBoundaryTransparency
+        color formationHue = color.new(baseHue, formationAlpha)
+        color projectionHue = color.new(baseHue, projectionAlpha)
+
+        // Observed formation boundaries: quiet solid lines only inside the structure.
+        float upperFormationStart = f_y(p.upper, p.upperSlope, p.baseX, formationStart)
+        float upperFormationEnd = f_y(p.upper, p.upperSlope, p.baseX, formationEnd)
+        float lowerFormationStart = f_y(p.lower, p.lowerSlope, p.baseX, formationStart)
+        float lowerFormationEnd = f_y(p.lower, p.lowerSlope, p.baseX, formationEnd)
+        f_line(formationStart, upperFormationStart, formationEnd, upperFormationEnd, formationHue, line.style_solid, 1)
+        f_line(formationStart, lowerFormationStart, formationEnd, lowerFormationEnd, formationHue, line.style_solid, 1)
+
+        // Short post-formation projection: dashed and visually secondary.
+        if projectionEnd > projectionStart
+            float upperProjectionStart = f_y(p.upper, p.upperSlope, p.baseX, projectionStart)
+            float upperProjectionEnd = f_y(p.upper, p.upperSlope, p.baseX, projectionEnd)
+            float lowerProjectionStart = f_y(p.lower, p.lowerSlope, p.baseX, projectionStart)
+            float lowerProjectionEnd = f_y(p.lower, p.lowerSlope, p.baseX, projectionEnd)
+            f_line(projectionStart, upperProjectionStart, projectionEnd, upperProjectionEnd, projectionHue, line.style_dashed, 1)
+            f_line(projectionStart, lowerProjectionStart, projectionEnd, lowerProjectionEnd, projectionHue, line.style_dashed, 1)
+
+        // Invalidation is useful while the setup is live, but terminal history should not
+        // paint another long red line across the chart.
+        float invalidation = not na(p.stop) ? p.stop : p.invalidation
+        if not terminal and not na(invalidation)
+            int invalidationStart = na(p.confirmedAt) ? p.born : p.confirmedAt
+            f_line(invalidationStart, invalidation, projectionEnd, invalidation, color.new(color.red, selected ? 52 : 72), line.style_dotted, 1)
+
+    // Trade-management levels are selected-signal-first. Unselected observations can be
+    // explicitly opted in from settings, but are quiet by default.
+    bool drawTradeRefs = show_targets and not na(p.confirmedAt) and (selected or show_observation_targets)
+    if drawTradeRefs
+        int levelEnd = terminal ? math.min(projectionEnd, p.finishedAt) : projectionEnd
+        int targetAlpha = selected ? 28 : 72
+        int stopAlpha = selected ? 30 : 74
+        int refAlpha = selected ? 58 : 82
+        f_line(p.confirmedAt, p.target, levelEnd, p.target, color.new(color.aqua, targetAlpha), line.style_dashed, selected ? 2 : 1)
+        f_line(p.confirmedAt, p.entry, levelEnd, p.entry, color.new(color.gray, refAlpha), line.style_dotted, 1)
+        f_line(p.confirmedAt, p.stop, levelEnd, p.stop, color.new(color.red, stopAlpha), line.style_dashed, selected ? 2 : 1)
+
+        float rightGap = math.max(tick * 8.0, p.formationATR * rightLabelGapATR)
+        int entryPreference = rank % 2 == 0 ? 1 : -1
+        float entryLabelY = f_rightLabelY(levelEnd, p.entry, rightGap, entryPreference)
+        float targetLabelY = f_rightLabelY(levelEnd, p.target, rightGap, p.direction)
+        float stopLabelY = f_rightLabelY(levelEnd, p.stop, rightGap, -p.direction)
+
+        if math.abs(entryLabelY - p.entry) > tick
+            f_line(levelEnd, p.entry, levelEnd, entryLabelY, color.new(color.gray, 76), line.style_dotted, 1)
+        if math.abs(targetLabelY - p.target) > tick
+            f_line(levelEnd, p.target, levelEnd, targetLabelY, color.new(color.teal, 76), line.style_dotted, 1)
+        if math.abs(stopLabelY - p.stop) > tick
+            f_line(levelEnd, p.stop, levelEnd, stopLabelY, color.new(color.red, 76), line.style_dotted, 1)
+
+        string refTip = f_ref(p) + " | " + p.name + "\nReference close=" + f_price(p.entry) + "\nGrade=" + f_gradeName(p.grade) + "; R/R=" + (na(p.rr) ? "-" : str.tostring(p.rr, "#.##"))
+        string targetTip = f_ref(p) + " | " + p.name + "\nTP / profit reference=" + f_price(p.target) + "\nReference close=" + f_price(p.entry)
+        string stopTip = f_ref(p) + " | " + p.name + "\nSL / invalidation reference=" + f_price(p.stop) + "\nReference close=" + f_price(p.entry)
+        f_labelTip(levelEnd, targetLabelY, "TP", color.teal, label.style_label_left, size.tiny, targetTip, selected ? 20 : 58)
+        f_labelTip(levelEnd, stopLabelY, "SL", color.red, label.style_label_left, size.tiny, stopTip, selected ? 20 : 58)
+        f_labelTip(levelEnd, entryLabelY, "REF", color.gray, label.style_label_left, size.tiny, refTip, selected ? 42 : 70)
+    true
+
+var table patternTable = table.new(f_position(panel_position), 8, max_patterns + 3, bgcolor=color.new(color.black, panel_transparency), border_color=color.new(color.gray, 65), border_width=1)
+// Prevent the two panels from hiding one another when identical positions are selected.
+string effectiveReasonPosition = reason_position == panel_position ? (panel_position == "bottom_right" ? "bottom_left" : "bottom_right") : reason_position
+var table reasonTable = table.new(f_position(effectiveReasonPosition), 1, reason_limit + 1, bgcolor=color.new(color.black, panel_transparency), border_color=color.new(color.gray, 65), border_width=1)
+if barstate.isfirst
+    table.merge_cells(patternTable, 0, max_patterns + 1, 7, max_patterns + 1)
+    table.merge_cells(patternTable, 0, max_patterns + 2, 7, max_patterns + 2)
+
+if barstate.islast
+    while array.size(drawLines) > 0
+        line.delete(array.pop(drawLines))
+    while array.size(drawLabels) > 0
+        label.delete(array.pop(drawLabels))
+    array.clear(rightLabelXs)
+    array.clear(rightLabelYs)
+    array.clear(rightLabelGaps)
+    table.clear(patternTable, 0, 0, 7, max_patterns + 2)
+    table.clear(reasonTable, 0, 0, 0, reason_limit)
+    // Last CLOSED state stays visible throughout an unconfirmed realtime bar.
+    int latestClosed = barstate.isconfirmed ? bar_index : bar_index - 1
+    array<int> displayed = array.new_int()
+    int pending = 0
+    int active = 0
+    if array.size(registry) > 0
+        for p in registry
+            pending += p.state == 0 ? 1 : 0
+            active += p.state == 1 ? 1 : 0
+        // Selected active signals first; other confirmations remain observations only.
+        // Newer first within each tier. No global net position or probability ranking.
+        for tier = 0 to 3
+            if tier < 3 or show_history
+                for j = 0 to array.size(registry) - 1
+                    int index = array.size(registry) - 1 - j
+                    Pattern p = array.get(registry, index)
+                    bool match = tier == 0 ? (p.state == 1 and p.signalSelected) : tier == 1 ? (p.state == 1 and not p.signalSelected) : tier == 2 ? p.state == 0 : p.state > 1
+                    if match and array.size(displayed) < max_patterns
+                        array.push(displayed, index)
+    string textSize = f_textSize()
+    if show_table
+        table.cell(patternTable, 0, 0, "PE 2.1.3 | Pattern / Ref", text_color=color.white, bgcolor=color.new(color.blue, 35), text_size=textSize)
+        table.cell(patternTable, 1, 0, "Direction", text_color=color.white, text_size=textSize)
+        table.cell(patternTable, 2, 0, "Grade / Setup score", text_color=color.white, text_size=textSize)
+        table.cell(patternTable, 3, 0, "State", text_color=color.white, text_size=textSize)
+        table.cell(patternTable, 4, 0, "Ref close", text_color=color.white, text_size=textSize)
+        table.cell(patternTable, 5, 0, "TP / profit ref", text_color=color.white, text_size=textSize)
+        table.cell(patternTable, 6, 0, "SL / invalidation", text_color=color.white, text_size=textSize)
+        table.cell(patternTable, 7, 0, "Ref. R/R", text_color=color.white, text_size=textSize)
+    if show_explanation
+        table.cell(reasonTable, 0, 0, "Evidence | observed geometry, NOT probability", text_color=color.white, bgcolor=color.new(color.purple, 35), text_size=textSize)
+    if array.size(displayed) > 0
+        for i = 0 to array.size(displayed) - 1
+            Pattern p = array.get(registry, array.get(displayed, i))
+            f_drawPattern(p, i, latestClosed)
+            color hue = f_color(p.direction)
+            if show_table
+                table.cell(patternTable, 0, i + 1, f_ref(p) + " | " + p.name, text_color=color.white, text_size=textSize)
+                table.cell(patternTable, 1, i + 1, f_dir(p.direction), text_color=hue, text_size=textSize)
+                string evidenceCell = na(p.confirmedAt) ? (show_confidence ? "Shape " + str.tostring(p.score, "#") : "Await confirmation") : f_gradeName(p.grade) + " " + str.tostring(p.strength, "#") + (p.volumeAvailable ? "" : " | Vol N/A")
+                string stateCell = f_state(p.state) + (p.state == 1 ? (p.signalSelected ? "\nSIGNAL" : "\nObservation only") : "")
+                table.cell(patternTable, 2, i + 1, evidenceCell, text_color=p.grade >= 2 ? color.aqua : color.silver, text_size=textSize)
+                table.cell(patternTable, 3, i + 1, stateCell, text_color=p.state == 1 and p.signalSelected ? color.aqua : color.silver, text_size=textSize)
+                table.cell(patternTable, 4, i + 1, f_price(p.entry), text_color=color.silver, text_size=textSize)
+                table.cell(patternTable, 5, i + 1, f_price(p.target), text_color=color.aqua, text_size=textSize)
+                table.cell(patternTable, 6, i + 1, f_price(p.stop), text_color=color.red, text_size=textSize)
+                table.cell(patternTable, 7, i + 1, na(p.rr) ? "-" : str.tostring(p.rr, "#.##"), text_color=color.silver, text_size=textSize)
+            if show_explanation and i < reason_limit
+                string statusInfo = "\nRecognized bar=" + str.tostring(p.born) + "; signal=" + (na(p.confirmedAt) ? "not confirmed" : str.tostring(p.confirmedAt)) + "; stop=" + f_price(p.stop)
+                string gradeInfo = not na(p.confirmedAt) ? "\n" + f_evidenceText(p) : "\nEvidence grade is calculated only at price confirmation."
+                table.cell(reasonTable, 0, i + 1, f_ref(p) + " | " + p.name + "\n" + f_wrap(p.evidence, 66) + "\n" + f_wrap(statusInfo, 66) + gradeInfo, text_color=color.white, text_size=textSize, text_halign=text.align_left)
+    else
+        string emptyText = not chart.is_standard ? "Standard OHLC charts only: detection disabled" : not warmed ? "Warming up: more bars required" : "No qualifying live structure"
+        if show_table
+            table.cell(patternTable, 0, 1, emptyText, text_color=color.silver, text_size=textSize)
+        if show_explanation
+            table.cell(reasonTable, 0, 1, emptyText, text_color=color.silver, text_size=textSize)
+    if show_table
+        string info = "Closed bars only | READY " + str.tostring(pending) + " | CONFIRMED " + str.tostring(active) + " | right-pivot lag " + str.tostring(pivotLen) + " bars"
+        string caution = "Grades != win rate; TP/SL != orders. Min grade=" + signalMinGrade + "; Capacity skips=" + str.tostring(diagnostics.capacitySkipped)
+        if volumeFilter and (na(volume) or na(previousVolumeMean) or previousVolumeMean <= 0.0)
+            caution += " | Volume unavailable: confirmation blocked"
+        table.cell(patternTable, 0, max_patterns + 1, info, text_color=color.silver, text_size=textSize)
+        table.cell(patternTable, 0, max_patterns + 2, caution, text_color=diagnostics.capacitySkipped > 0 ? color.orange : color.silver, text_size=textSize)</script>
+<script>
+const CODE = document.getElementById('src').textContent;
+const ta  = document.getElementById('code');
+const msg = document.getElementById('msg');
+ta.value = CODE;
+
+function ok(t, c) { msg.style.color = c; msg.textContent = t; }
+
+function legacyCopy() {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  let done = false;
+  try { done = document.execCommand('copy'); } catch (e) { done = false; }
+  return done;
+}
+
+document.getElementById('copy').onclick = async () => {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(CODE);
+      return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+    } catch (e) { /* fall through to the legacy path */ }
+  }
+  if (legacyCopy()) return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+  ok('Copy blocked by the browser \u2014 tap SELECT ALL, then long-press and Copy', '#fbbf24');
+};
+
+document.getElementById('sel').onclick = () => {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  ok('Selected. Long-press the box and choose Copy.', '#4ade80');
+};
+</script>
+</body>
+</html>

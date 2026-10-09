@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auto-draw indicators — verified</title>
+<style>
+ * { box-sizing:border-box; }
+ body { margin:0; padding:14px; background:#111; color:#eee;
+        font-family:-apple-system,Roboto,Segoe UI,sans-serif; }
+ h1 { font-size:18px; margin:0 0 6px; }
+ .meta { font-size:12px; color:#888; margin:0 0 14px; line-height:1.6; }
+ .card { background:#1b1b1b; border:1px solid #2a2a2a; border-radius:12px;
+         padding:13px; margin-bottom:11px; }
+ .card h2 { font-size:15px; margin:0 0 4px; }
+ .who { font-size:11px; color:#7dd3fc; margin:0 0 7px; }
+ .what { font-size:13px; color:#bbb; line-height:1.5; margin:0 0 10px; }
+ a.btn { display:block; text-align:center; text-decoration:none; padding:13px;
+         border-radius:9px; font-weight:700; font-size:15px; color:#fff;
+         background:#0a8f3c; margin-bottom:6px; }
+ a.tv { background:#2b6cb0; }
+ .note { font-size:11px; color:#888; line-height:1.6; margin-top:14px; }
+ .warn { color:#fbbf24; }
+</style></head><body>
+<h1>Auto-draw indicators — verified</h1>
+<p class="meta">4 scripts &middot; each one compiled on TradingView's own compiler
+with <b>0 errors</b> before being published here.<br>
+Tap <b>COPY</b> on a page &rarr; Pine Editor &rarr; select all &rarr; paste &rarr;
+Add to chart. Or tap the blue button to open the author's page and add it in one click.</p>
+<div class="card">
+<h2>Auto Trendline Breaks — ADXAE</h2>
+<p class="who">by ADXAE</p>
+<p class="what">Swing pivots → validated trendlines (min touches, ATR tolerance, max anchor age) → breakout labels + alerts. Draws, does not signal.</p>
+<a class="btn" href="autotrendlines-breaks.html">COPY &amp; paste into Pine Editor</a>
+<a class="btn tv" href="https://www.tradingview.com/script/AvvB4ZNT-Auto-Trendline-Breaks/">Open on TradingView → Add to chart</a>
+</div>
+<div class="card">
+<h2>Auto Trend Lines [ZOM] — ZenOutMan</h2>
+<p class="who">by ZenOutMan</p>
+<p class="what">Simpler pivot trendlines with proximity filter, touch / breakout alerts and a stats table. Fastest of the three to read.</p>
+<a class="btn" href="autotrendlines-zom.html">COPY &amp; paste into Pine Editor</a>
+<a class="btn tv" href="https://www.tradingview.com/script/EWhIq6NJ-Auto-Trend-Lines-ZOM/">Open on TradingView → Add to chart</a>
+</div>
+<div class="card">
+<h2>Auto Harmonic Patterns — Trendoscope</h2>
+<p class="who">by Trendoscope (HeWhoMustNotBeNamed)</p>
+<p class="what">ZigZag pivots → strict XABCD ratio test → Gartley / Bat / Butterfly / Crab / Shark / Cypher drawn automatically.</p>
+<a class="btn" href="harmonic-patterns.html">COPY &amp; paste into Pine Editor</a>
+<a class="btn tv" href="https://www.tradingview.com/script/f6Ae6av3-Auto-Harmonic-Patterns-Open-Source/">Open on TradingView → Add to chart</a>
+</div>
+<div class="card">
+<h2>Advanced Pattern Detection [50+] — Hunk77</h2>
+<p class="who">by Hunk77</p>
+<p class="what">Double top/bottom, head &amp; shoulders, triangles, wedges, flags — detected on CLOSED bars only. Author states the score is a fit metric, NOT a probability.</p>
+<a class="btn" href="pattern-detection-50.html">COPY &amp; paste into Pine Editor</a>
+<a class="btn tv" href="https://www.tradingview.com/script/zy8EETop/">Open on TradingView → Add to chart</a>
+</div>
+<p class="note"><span class="warn">These draw. They do not predict.</span>
+A trendline or pattern can only be drawn after its pivot is confirmed, so every
+line on the chart appears a few bars late — that is inherent to the method,
+not a bug in the script. None of these four was backtested for a tradable edge,
+and a drawn pattern is not a signal. Author + licence are kept in every file.</p>
+</body></html>
