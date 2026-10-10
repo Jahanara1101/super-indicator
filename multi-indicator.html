@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSI + SR Channels + EMA x4 + VWAP + MACD</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; background:#111; color:#eee;
+         font-family:-apple-system,Roboto,Segoe UI,sans-serif; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  .meta { font-size:12px; color:#888; margin:0 0 12px; }
+  ol { font-size:13px; color:#bbb; margin:0 0 14px; padding-left:20px; line-height:1.6; }
+  ol b { color:#fff; }
+  button { width:100%; padding:20px; font-size:20px; font-weight:700;
+            border:0; border-radius:12px; margin-bottom:10px; color:#fff; }
+  #copy { background:#0a8f3c; }
+  #sel  { background:#2b6cb0; }
+  #msg  { font-size:14px; min-height:22px; margin-bottom:10px; color:#4ade80;
+           font-weight:600; line-height:1.4; }
+  textarea { width:100%; height:38vh; background:#000; color:#9ae6b4;
+              border:1px solid #333; border-radius:10px; padding:10px;
+              font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+              line-height:1.35; white-space:pre; }
+  .foot { font-size:12px; color:#777; margin-top:10px; line-height:1.6; }
+</style>
+</head>
+<body>
+<h1>RSI + SR Channels + EMA x4 + VWAP + MACD</h1>
+<p class="meta">257 lines &middot; 11765 characters &middot; //@version=6</p>
+<ol>
+  <li>Tap <b>COPY</b> below</li>
+  <li>Open TradingView &rarr; <b>Pine Editor</b></li>
+  <li><b>Long-press &rarr; Select all</b>, then <b>backspace</b> so the default
+      template is gone</li>
+  <li><b>Paste</b> &rarr; <b>Save</b> &rarr; <b>Add to chart</b></li>
+</ol>
+<div id="msg"></div>
+<button id="copy">COPY</button>
+<button id="sel">SELECT ALL (fallback)</button>
+<textarea id="code" readonly spellcheck="false"></textarea>
+<p class="foot">If COPY does nothing, tap SELECT ALL, then long-press inside the box
+and choose Copy. The box is read-only so nothing can be changed by accident.</p>
+
+<script type="text/plain" id="src">//@version=6
+indicator("RSI + SR Channels + EMA + VWAP + MACD", "MULTI-IND", overlay=false, max_bars_back=501)
+
+// ============================== INPUTS ==============================
+
+// ---- RSI ----
+gR = "1 - RSI"
+showRSI  = input.bool(true, "Show RSI", group=gR)
+rsiLen   = input.int(14, "Length", minval=1, group=gR)
+rsiSrc   = input.source(close, "Source", group=gR)
+rsiCol   = input.color(color.purple, "Line colour", group=gR)
+rsiWidth = input.int(2, "Line width", minval=1, maxval=4, group=gR)
+rsiOB    = input.int(70, "Overbought", minval=1, maxval=100, group=gR)
+rsiOS    = input.int(30, "Oversold", minval=0, maxval=99, group=gR)
+showRSILv= input.bool(true, "Show 70 / 50 / 30 lines", group=gR)
+obCol    = input.color(color.red, "Overbought colour", group=gR)
+midCol   = input.color(color.gray, "Midline colour", group=gR)
+osCol    = input.color(color.green, "Oversold colour", group=gR)
+
+// ---- EMA 200 (the one that was already here) ----
+gE1 = "2 - EMA 1  (was EMA 200)"
+showE1   = input.bool(true, "Show EMA 1", group=gE1)
+lenE1    = input.int(200, "Length", minval=1, group=gE1)
+colE1    = input.color(color.orange, "Colour", group=gE1)
+wE1      = input.int(2, "Line width", minval=1, maxval=5, group=gE1)
+
+// ---- EMA 2 ----
+gE2 = "3 - EMA 2"
+showE2   = input.bool(false, "Show EMA 2", group=gE2)
+lenE2    = input.int(50, "Length", minval=1, group=gE2)
+colE2    = input.color(color.aqua, "Colour", group=gE2)
+wE2      = input.int(1, "Line width", minval=1, maxval=5, group=gE2)
+
+// ---- EMA 3 ----
+gE3 = "4 - EMA 3"
+showE3   = input.bool(false, "Show EMA 3", group=gE3)
+lenE3    = input.int(100, "Length", minval=1, group=gE3)
+colE3    = input.color(color.yellow, "Colour", group=gE3)
+wE3      = input.int(1, "Line width", minval=1, maxval=5, group=gE3)
+
+// ---- EMA 4 ----
+gE4 = "5 - EMA 4"
+showE4   = input.bool(false, "Show EMA 4", group=gE4)
+lenE4    = input.int(21, "Length", minval=1, group=gE4)
+colE4    = input.color(color.fuchsia, "Colour", group=gE4)
+wE4      = input.int(1, "Line width", minval=1, maxval=5, group=gE4)
+
+// ---- VWAP ----
+gV = "6 - VWAP"
+showVWAP = input.bool(true, "Show VWAP", group=gV)
+vwapAnchor = input.string("Session", "Anchor", options=["Session", "Day", "Week", "Month", "Quarter", "Year"], group=gV)
+vwapCol  = input.color(color.blue, "Colour", group=gV)
+vwapW    = input.int(2, "Line width", minval=1, maxval=5, group=gV)
+showVWB  = input.bool(false, "Show standard-deviation bands", group=gV)
+vwbMult  = input.float(1.0, "Band width (x stdev)", minval=0.1, maxval=5.0, step=0.1, group=gV)
+vwapBCol = input.color(color.new(color.blue, 60), "Band colour", group=gV)
+
+// ---- MACD ----
+gM = "7 - MACD"
+showMACD = input.bool(true, "Show MACD", group=gM)
+macdFast = input.int(12, "Fast length", minval=1, group=gM)
+macdSlow = input.int(26, "Slow length", minval=1, group=gM)
+macdSig  = input.int(9, "Signal length", minval=1, group=gM)
+macdSrc  = input.source(close, "Source", group=gM)
+macdCol  = input.color(color.blue, "MACD colour", group=gM)
+sigCol   = input.color(color.orange, "Signal colour", group=gM)
+showHist = input.bool(true, "Show histogram", group=gM)
+histUp   = input.color(color.green, "Histogram up", group=gM)
+histDn   = input.color(color.red, "Histogram down", group=gM)
+
+// ---- S/R Channels ----
+gS = "8 - S/R Channels"
+showSR   = input.bool(true, "Show S/R channels", group=gS)
+prd      = input.int(10, "Pivot period", minval=1, group=gS)
+ppsrc    = input.string("High/Low", "Pivot source", options=["High/Low", "Close"], group=gS)
+ChannelW = input.float(5, "Channel width (%)", minval=0.1, step=0.1, group=gS)
+minstrength = input.int(1, "Minimum strength", minval=1, group=gS)
+maxnumsr = input.int(5, "Maximum channels", minval=1, maxval=10, group=gS)
+loopback = input.int(290, "Look-back (bars)", minval=10, maxval=500, group=gS)
+resCol   = input.color(color.red, "Resistance colour", group=gS)
+supCol   = input.color(color.lime, "Support colour", group=gS)
+inchCol  = input.color(color.gray, "Inside-channel colour", group=gS)
+srFill   = input.int(75, "Channel transparency (0-100)", minval=0, maxval=100, group=gS)
+
+// ============================== RSI  (this script's own pane) ==============================
+rsiVal = ta.rsi(rsiSrc, rsiLen)
+plot(showRSI ? rsiVal : na, "RSI", color=rsiCol, linewidth=rsiWidth)
+hline(rsiOB, "Overbought", color = showRSI and showRSILv ? obCol : na, linestyle=hline.style_dashed)
+hline(50, "Midline", color = showRSI and showRSILv ? midCol : na, linestyle=hline.style_dotted)
+hline(rsiOS, "Oversold", color = showRSI and showRSILv ? osCol : na, linestyle=hline.style_dashed)
+
+// ============================== MAIN CHART OVERLAYS ==============================
+// Everything below is forced onto the price chart while this script keeps its
+// own pane for the RSI.
+plot(showE1 ? ta.ema(close, lenE1) : na, "EMA 1", color=colE1, linewidth=wE1, force_overlay=true)
+plot(showE2 ? ta.ema(close, lenE2) : na, "EMA 2", color=colE2, linewidth=wE2, force_overlay=true)
+plot(showE3 ? ta.ema(close, lenE3) : na, "EMA 3", color=colE3, linewidth=wE3, force_overlay=true)
+plot(showE4 ? ta.ema(close, lenE4) : na, "EMA 4", color=colE4, linewidth=wE4, force_overlay=true)
+
+// VWAP, anchored
+anchorTf = switch vwapAnchor
+    "Session" => "1D"
+    "Day"     => "1D"
+    "Week"    => "1W"
+    "Month"   => "1M"
+    "Quarter" => "3M"
+    "Year"    => "12M"
+    => "1D"
+vwapVal = ta.vwap(hlc3, timeframe.change(anchorTf))
+plot(showVWAP ? vwapVal : na, "VWAP", color=vwapCol, linewidth=vwapW, force_overlay=true)
+
+// VWAP standard-deviation bands
+vwapSd = ta.stdev(hlc3, 20)
+plot(showVWAP and showVWB ? vwapVal + vwbMult * vwapSd : na, "VWAP +SD", color=vwapBCol, linewidth=1, force_overlay=true)
+plot(showVWAP and showVWB ? vwapVal - vwbMult * vwapSd : na, "VWAP -SD", color=vwapBCol, linewidth=1, force_overlay=true)
+
+// MACD - the script's own pane is taken by the RSI, so the lines ride the price
+// chart. Turn them off and open a second pane if you want them at their own scale.
+[macdLine, sigLine, histLine] = ta.macd(macdSrc, macdFast, macdSlow, macdSig)
+plot(showMACD and showHist ? histLine : na, "Histogram", color = histLine >= 0 ? histUp : histDn, style=plot.style_columns, force_overlay=true)
+plot(showMACD ? macdLine : na, "MACD", color=macdCol, linewidth=2, force_overlay=true)
+plot(showMACD ? sigLine : na, "Signal", color=sigCol, linewidth=1, force_overlay=true)
+
+// ============================== S/R CHANNELS ==============================
+res_col  = color.new(resCol, srFill)
+sup_col  = color.new(supCol, srFill)
+inch_col = color.new(inchCol, srFill)
+
+float src1 = ppsrc == "High/Low" ? high : math.max(close, open)
+float src2 = ppsrc == "High/Low" ? low : math.min(close, open)
+float ph = ta.pivothigh(src1, prd, prd)
+float pl = ta.pivotlow(src2, prd, prd)
+
+prdhighest = ta.highest(300)
+prdlowest  = ta.lowest(300)
+cwidth = (prdhighest - prdlowest) * ChannelW / 100
+
+var pivotvals = array.new_float(0)
+var pivotlocs = array.new_float(0)
+if bool(ph) or bool(pl)
+    array.unshift(pivotvals, bool(ph) ? ph : pl)
+    array.unshift(pivotlocs, bar_index)
+    for x = array.size(pivotvals) - 1 to 0 by 1
+        if bar_index - array.get(pivotlocs, x) > loopback
+            array.pop(pivotvals)
+            array.pop(pivotlocs)
+            continue
+        break
+
+get_sr_vals(ind) =>
+    float lo = array.get(pivotvals, ind)
+    float hi = lo
+    int numpp = 0
+    for y = 0 to array.size(pivotvals) - 1 by 1
+        float cpp = array.get(pivotvals, y)
+        float wdth = cpp <= hi ? hi - cpp : cpp - lo
+        if wdth <= cwidth
+            if cpp <= hi
+                lo := math.min(lo, cpp)
+            else
+                hi := math.max(hi, cpp)
+            numpp := numpp + 20
+    [hi, lo, numpp]
+
+var suportresistance = array.new_float(20, 0)
+changeit(x, y) =>
+    tmp = array.get(suportresistance, y * 2)
+    array.set(suportresistance, y * 2, array.get(suportresistance, x * 2))
+    array.set(suportresistance, x * 2, tmp)
+    tmp := array.get(suportresistance, y * 2 + 1)
+    array.set(suportresistance, y * 2 + 1, array.get(suportresistance, x * 2 + 1))
+    array.set(suportresistance, x * 2 + 1, tmp)
+
+if bool(ph) or bool(pl)
+    supres = array.new_float(0)
+    stren = array.new_float(10, 0)
+    for x = 0 to array.size(pivotvals) - 1 by 1
+        [hi, lo, strength] = get_sr_vals(x)
+        array.push(supres, strength)
+        array.push(supres, hi)
+        array.push(supres, lo)
+    for x = 0 to array.size(pivotvals) - 1 by 1
+        h = array.get(supres, x * 3 + 1)
+        l = array.get(supres, x * 3 + 2)
+        s = 0
+        for y = 0 to loopback by 1
+            if high[y] <= h and high[y] >= l or low[y] <= h and low[y] >= l
+                s := s + 1
+        array.set(supres, x * 3, array.get(supres, x * 3) + s)
+    array.fill(suportresistance, 0)
+    src = 0
+    for x = 0 to array.size(pivotvals) - 1 by 1
+        stv = -1.
+        stl = -1
+        for y = 0 to array.size(pivotvals) - 1 by 1
+            if array.get(supres, y * 3) > stv and array.get(supres, y * 3) >= minstrength * 20
+                stv := array.get(supres, y * 3)
+                stl := y
+        if stl >= 0
+            hh = array.get(supres, stl * 3 + 1)
+            ll = array.get(supres, stl * 3 + 2)
+            array.set(suportresistance, src * 2, hh)
+            array.set(suportresistance, src * 2 + 1, ll)
+            array.set(stren, src, array.get(supres, stl * 3))
+            for y = 0 to array.size(pivotvals) - 1 by 1
+                if array.get(supres, y * 3 + 1) <= hh and array.get(supres, y * 3 + 1) >= ll or array.get(supres, y * 3 + 2) <= hh and array.get(supres, y * 3 + 2) >= ll
+                    array.set(supres, y * 3, -1)
+            src := src + 1
+            if src >= 10
+                break
+    for x = 0 to 8 by 1
+        for y = x + 1 to 9 by 1
+            if array.get(stren, y) > array.get(stren, x)
+                tmp = array.get(stren, y)
+                array.set(stren, y, array.get(stren, x))
+                changeit(x, y)
+
+get_level(ind) =>
+    float ret = na
+    if ind < array.size(suportresistance)
+        if array.get(suportresistance, ind) != 0
+            ret := array.get(suportresistance, ind)
+    ret
+
+get_color(ind) =>
+    color ret = na
+    if ind < array.size(suportresistance)
+        if array.get(suportresistance, ind) != 0
+            ret := array.get(suportresistance, ind) > close and array.get(suportresistance, ind + 1) > close ? res_col : array.get(suportresistance, ind) < close and array.get(suportresistance, ind + 1) < close ? sup_col : inch_col
+    ret
+
+var srchannels = array.new_box(10)
+if showSR
+    for x = 0 to math.min(9, maxnumsr) by 1
+        box.delete(array.get(srchannels, x))
+        srcol = get_color(x * 2)
+        if not na(srcol)
+            array.set(srchannels, x, box.new(left=bar_index, top=get_level(x * 2), right=bar_index + 1, bottom=get_level(x * 2 + 1), border_color=srcol, border_width=1, extend=extend.both, bgcolor=srcol, force_overlay=true))
+
+resistancebroken = false
+supportbroken = false
+
+not_in_a_channel = true
+if showSR
+    for x = 0 to math.min(9, maxnumsr) by 1
+        if close <= array.get(suportresistance, x * 2) and close >= array.get(suportresistance, x * 2 + 1)
+            not_in_a_channel := false
+
+if showSR and not_in_a_channel
+    for x = 0 to math.min(9, maxnumsr) by 1
+        if close[1] <= array.get(suportresistance, x * 2) and close > array.get(suportresistance, x * 2)
+            resistancebroken := true
+        if close[1] >= array.get(suportresistance, x * 2 + 1) and close < array.get(suportresistance, x * 2 + 1)
+            supportbroken := true
+
+alertcondition(resistancebroken, title="Resistance Broken", message="Resistance Broken")
+alertcondition(supportbroken, title="Support Broken", message="Support Broken")</script>
+<script>
+const CODE = document.getElementById('src').textContent;
+const ta  = document.getElementById('code');
+const msg = document.getElementById('msg');
+ta.value = CODE;
+
+function ok(t, c) { msg.style.color = c; msg.textContent = t; }
+
+function legacyCopy() {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  let done = false;
+  try { done = document.execCommand('copy'); } catch (e) { done = false; }
+  return done;
+}
+
+document.getElementById('copy').onclick = async () => {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(CODE);
+      return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+    } catch (e) { /* fall through to the legacy path */ }
+  }
+  if (legacyCopy()) return ok('COPIED \u2713  now paste it in TradingView', '#4ade80');
+  ok('Copy blocked by the browser \u2014 tap SELECT ALL, then long-press and Copy', '#fbbf24');
+};
+
+document.getElementById('sel').onclick = () => {
+  ta.focus();
+  ta.setSelectionRange(0, CODE.length);
+  ok('Selected. Long-press the box and choose Copy.', '#4ade80');
+};
+</script>
+</body>
+</html>
