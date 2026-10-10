@@ -27,7 +27,7 @@
 </head>
 <body>
 <h1>MASTER - SMC + Patterns + Volume</h1>
-<p class="meta">704 lines &middot; 32472 characters &middot; //@version=6</p>
+<p class="meta">598 lines &middot; 29739 characters &middot; //@version=6</p>
 <ol>
   <li>Tap <b>COPY</b> below</li>
   <li>Open TradingView &rarr; <b>Pine Editor</b></li>
@@ -45,15 +45,21 @@ and choose Copy. The box is read-only so nothing can be changed by accident.</p>
 <script type="text/plain" id="src">//@version=6
 indicator("MASTER - SMC + Patterns + Volume", "MASTER", overlay=false, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
-// ARCHITECTURE
-//   Pass 1 (every bar): detect events into flat state arrays. Nothing drawn.
-//   Pass 2 (last bar): wipe every drawing and rebuild from the state arrays.
-//   Rebuilding instead of appending keeps the object count inside
-//   TradingView's per-type limits and stops zones being redrawn every tick.
+// ARCHITECTURE - v7
+//   Everything is drawn AT THE MOMENT it is detected, on the bar where it
+//   happens, so the whole history is marked, not just the last bar.
 //
-// EVERY drawn element has its own on/off switch, its own colour, its own
-// transparency and its own size/width input. Defaults are red / green / white
-// so the chart looks the same as before until a setting is changed.
+//   v6 got this wrong: it collected events into arrays and drew them only
+//   inside `if barstate.islast`, so only the final few formations ever
+//   appeared and every older candle stayed bare.
+//
+//   Guard: all detection+drawing runs under `barstate.isconfirmed`, i.e. on
+//   closed bars only. Without it a condition that stays true for several ticks
+//   of the live bar would create the same box over and over.
+//
+//   Object budget: TradingView allows 500 boxes / 500 lines / 500 labels per
+//   script. f_cap() deletes the oldest as we pass 480, so the most recent
+//   history is always intact and the script never hits the hard limit.
 
 // ============================== HELPERS ==============================
 f_sty(string s) =>
@@ -69,17 +75,12 @@ f_size(string s) =>
         "Normal" => size.normal
         => size.large
 
-SIZE_OPTS = "Tiny,Small,Normal,Large"
-STYLE_OPTS = "Solid,Dashed,Dotted"
-
 // ============================== 1 - STRUCTURE ==============================
 gS = "1 - Structure"
 pivLen  = input.int(5, "Swing pivot length", minval=1, maxval=50, group=gS)
 pivInt  = input.int(2, "Internal pivot length", minval=1, maxval=20, group=gS)
 eqTol   = input.float(0.10, "Equal high/low tolerance (x ATR)", minval=0.01, maxval=0.5, step=0.01, group=gS)
-maxKeep = input.int(6, "Structure levels kept", minval=1, maxval=20, group=gS)
 zoneExt = input.int(15, "Zone extension (bars)", minval=2, maxval=300, group=gS)
-maxZ    = input.int(6, "Zones kept per type", minval=1, maxval=30, group=gS)
 txtTrans= input.int(20, "Zone text transparency", minval=0, maxval=100, group=gS)
 
 // ============================== 2 - BOS / CHoCH ==============================
@@ -178,7 +179,6 @@ patSize  = input.string("Small", "Name size", options=["Tiny", "Small", "Normal"
 showPatName = input.bool(true, "Show the pattern name", group=gPt)
 patTol   = input.float(0.35, "Equal-level tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=gPt)
 patMinH  = input.float(1.2, "Minimum pattern height (x ATR)", minval=0.2, maxval=10.0, step=0.1, group=gPt)
-maxPat   = input.int(4, "Patterns kept", minval=1, maxval=10, group=gPt)
 
 // ============================== 11 - VOLUME ==============================
 gV = "11 - Volume"
@@ -203,7 +203,11 @@ atr = ta.atr(14)
 var array<box>   gBox = array.new_box()
 var array<line>  gLin = array.new_line()
 var array<label> gLab = array.new_label()
+var array<box>   pBox = array.new_box()
+var array<line>  pLin = array.new_line()
+var array<label> pLab = array.new_label()
 
+// no borders on any rectangle
 f_box(left, top, right, bottom, bg) =>
     b = box.new(left, top, right, bottom, bgcolor=bg, border_color=color(na), border_width=0, force_overlay=true)
     array.push(gBox, b)
@@ -219,13 +223,45 @@ f_lab(x, y, txt, col, sty, sz) =>
     array.push(gLab, lb)
     lb
 
-f_clearAll() =>
-    while array.size(gBox) > 0
-        box.delete(array.pop(gBox))
-    while array.size(gLin) > 0
-        line.delete(array.pop(gLin))
-    while array.size(gLab) > 0
-        label.delete(array.pop(gLab))
+// oldest-first trim, so the newest history survives and the hard limit is
+// never reached
+f_cap() =>
+    while array.size(gBox) > 480
+        box.delete(array.shift(gBox))
+    while array.size(gLin) > 480
+        line.delete(array.shift(gLin))
+    while array.size(gLab) > 480
+        label.delete(array.shift(gLab))
+    while array.size(pBox) > 30
+        box.delete(array.shift(pBox))
+    while array.size(pLin) > 24
+        line.delete(array.shift(pLin))
+    while array.size(pLab) > 30
+        label.delete(array.shift(pLab))
+    true
+
+// Premium / Discount, OTE, Fibonacci guides and SD targets get their own small
+// pool. They are redrawn on every dealing-range update, so without a separate
+// budget they would push the structural marks (BOS / CHoCH / zones / patterns)
+// out of the 500-object window.
+f_pBox(left, top, right, bottom, bg) =>
+    b = box.new(left, top, right, bottom, bgcolor=bg, border_color=color(na), border_width=0, force_overlay=true)
+    array.push(pBox, b)
+    b
+
+f_pLine(x1, y1, x2, y2, col, sty, w) =>
+    l = line.new(x1, y1, x2, y2, color=col, style=sty, width=w, force_overlay=true)
+    array.push(pLin, l)
+    l
+
+f_pLab(x, y, txt, col, sty, sz) =>
+    lb = label.new(x, y, txt, color=color(na), textcolor=col, style=sty, size=sz, force_overlay=true)
+    array.push(pLab, lb)
+    lb
+
+f_pZone(left, top, right, bottom, txt, col) =>
+    if right > left
+        f_pLab(math.round((left + right) / 2), (top + bottom) / 2, txt, color.new(col, txtTrans), label.style_label_center, size.small)
     true
 
 f_zone(left, top, right, bottom, txt, col) =>
@@ -233,231 +269,7 @@ f_zone(left, top, right, bottom, txt, col) =>
         f_lab(math.round((left + right) / 2), (top + bottom) / 2, txt, color.new(col, txtTrans), label.style_label_center, size.small)
     true
 
-// ============================== STATE ==============================
-var array<int>   swX = array.new_int()
-var array<float> swY = array.new_float()
-var array<int>   swD = array.new_int()
-
-var array<int>   bX1 = array.new_int()
-var array<float> bY = array.new_float()
-var array<int>   bX2 = array.new_int()
-var array<int>   bKind = array.new_int()
-var array<int>   bDir = array.new_int()
-
-var array<int>   iX1 = array.new_int()
-var array<float> iY = array.new_float()
-var array<int>   iX2 = array.new_int()
-var array<int>   iKind = array.new_int()
-var array<int>   iDir = array.new_int()
-
-var array<int>   fX1 = array.new_int()
-var array<float> fT = array.new_float()
-var array<float> fB = array.new_float()
-
-var array<int>   oX1 = array.new_int()
-var array<float> oT = array.new_float()
-var array<float> oB = array.new_float()
-
-var array<int>   sX1 = array.new_int()
-var array<float> sT = array.new_float()
-var array<float> sB = array.new_float()
-var array<int>   sD = array.new_int()
-
-var int lastSdBar = -999
-
-var array<int>   pId = array.new_int()
-var array<int>   pKind = array.new_int()
-var array<int>   pN = array.new_int()
-var array<int>   pX1 = array.new_int()
-var array<int>   pX2 = array.new_int()
-var array<int>   pX3 = array.new_int()
-var array<int>   pX4 = array.new_int()
-var array<int>   pX5 = array.new_int()
-var array<float> pY1 = array.new_float()
-var array<float> pY2 = array.new_float()
-var array<float> pY3 = array.new_float()
-var array<float> pY4 = array.new_float()
-var array<float> pY5 = array.new_float()
-
-f_pushPat(id, kind, n, x1, y1, x2, y2, x3, y3, x4, y4, x5, y5) =>
-    array.push(pId, id)
-    array.push(pKind, kind)
-    array.push(pN, n)
-    array.push(pX1, x1), array.push(pY1, y1)
-    array.push(pX2, x2), array.push(pY2, y2)
-    array.push(pX3, x3), array.push(pY3, y3)
-    array.push(pX4, x4), array.push(pY4, y4)
-    array.push(pX5, x5), array.push(pY5, y5)
-    while array.size(pId) > maxPat
-        array.shift(pId), array.shift(pKind), array.shift(pN)
-        array.shift(pX1), array.shift(pY1), array.shift(pX2), array.shift(pY2)
-        array.shift(pX3), array.shift(pY3), array.shift(pX4), array.shift(pY4)
-        array.shift(pX5), array.shift(pY5)
-    true
-
-// ============================== PASS 1 - DETECTION ==============================
-ph = ta.pivothigh(high, pivLen, pivLen)
-pl = ta.pivotlow(low, pivLen, pivLen)
-newPivot = not na(ph) or not na(pl)
-
-phi = ta.pivothigh(high, pivInt, pivInt)
-pli = ta.pivotlow(low, pivInt, pivInt)
-
-if newPivot
-    if not na(ph)
-        array.push(swX, bar_index - pivLen), array.push(swY, ph), array.push(swD, 1)
-    else
-        array.push(swX, bar_index - pivLen), array.push(swY, pl), array.push(swD, -1)
-    while array.size(swX) > 40
-        array.shift(swX), array.shift(swY), array.shift(swD)
-
-var float lastH = na
-var int   lastHx = na
-var float lastL = na
-var int   lastLx = na
-var int   trend = 0
-var int   hTaken = -1
-var int   lTaken = -1
-
-if newPivot
-    if not na(ph)
-        lastH := ph
-        lastHx := bar_index - pivLen
-    if not na(pl)
-        lastL := pl
-        lastLx := bar_index - pivLen
-
-upBreak = not na(lastH) and close > lastH and hTaken != lastHx
-dnBreak = not na(lastL) and close < lastL and lTaken != lastLx
-
-if upBreak
-    bool cont = trend == 1
-    hTaken := lastHx
-    array.push(bX1, lastHx), array.push(bY, lastH), array.push(bX2, bar_index)
-    array.push(bKind, cont ? 1 : 2), array.push(bDir, 1)
-    while array.size(bX1) > maxKeep
-        array.shift(bX1), array.shift(bY), array.shift(bX2), array.shift(bKind), array.shift(bDir)
-    int obi = na
-    for k = 1 to obLook
-        if close[k] < open[k]
-            obi := k
-            break
-    if showOB and not na(obi)
-        array.push(oX1, bar_index - obi), array.push(oT, high[obi]), array.push(oB, low[obi])
-        while array.size(oX1) > maxZ
-            array.shift(oX1), array.shift(oT), array.shift(oB)
-    trend := 1
-
-if dnBreak
-    bool cont = trend == -1
-    lTaken := lastLx
-    array.push(bX1, lastLx), array.push(bY, lastL), array.push(bX2, bar_index)
-    array.push(bKind, cont ? 1 : 2), array.push(bDir, -1)
-    while array.size(bX1) > maxKeep
-        array.shift(bX1), array.shift(bY), array.shift(bX2), array.shift(bKind), array.shift(bDir)
-    int obi = na
-    for k = 1 to obLook
-        if close[k] > open[k]
-            obi := k
-            break
-    if showOB and not na(obi)
-        array.push(oX1, bar_index - obi), array.push(oT, high[obi]), array.push(oB, low[obi])
-        while array.size(oX1) > maxZ
-            array.shift(oX1), array.shift(oT), array.shift(oB)
-    trend := -1
-
-var float iLastH = na
-var int   iLastHx = na
-var float iLastL = na
-var int   iLastLx = na
-var int   iTrend = 0
-var int   iHTaken = -1
-var int   iLTaken = -1
-
-if not na(phi)
-    iLastH := phi
-    iLastHx := bar_index - pivInt
-if not na(pli)
-    iLastL := pli
-    iLastLx := bar_index - pivInt
-
-iUp = not na(iLastH) and close > iLastH and iHTaken != iLastHx
-iDn = not na(iLastL) and close < iLastL and iLTaken != iLastLx
-
-if iUp
-    bool cont = iTrend == 1
-    iHTaken := iLastHx
-    array.push(iX1, iLastHx), array.push(iY, iLastH), array.push(iX2, bar_index)
-    array.push(iKind, cont ? 1 : 2), array.push(iDir, 1)
-    while array.size(iX1) > maxKeep
-        array.shift(iX1), array.shift(iY), array.shift(iX2), array.shift(iKind), array.shift(iDir)
-    iTrend := 1
-if iDn
-    bool cont = iTrend == -1
-    iLTaken := iLastLx
-    array.push(iX1, iLastLx), array.push(iY, iLastL), array.push(iX2, bar_index)
-    array.push(iKind, cont ? 1 : 2), array.push(iDir, -1)
-    while array.size(iX1) > maxKeep
-        array.shift(iX1), array.shift(iY), array.shift(iX2), array.shift(iKind), array.shift(iDir)
-    iTrend := -1
-
-var float trTop = na
-var int   trTopX = na
-var float trBot = na
-var int   trBotX = na
-
-if newPivot
-    if not na(ph)
-        trTop := ph
-        trTopX := bar_index - pivLen
-    if not na(pl)
-        trBot := pl
-        trBotX := bar_index - pivLen
-if na(trTop) or high > trTop
-    trTop := high
-    trTopX := bar_index
-if na(trBot) or low < trBot
-    trBot := low
-    trBotX := bar_index
-
-if low > high[2] and close[1] > open[1]
-    array.push(fX1, bar_index - 2), array.push(fT, low), array.push(fB, high[2])
-    while array.size(fX1) > maxZ
-        array.shift(fX1), array.shift(fT), array.shift(fB)
-if high < low[2] and close[1] < open[1]
-    array.push(fX1, bar_index - 2), array.push(fT, low[2]), array.push(fB, high)
-    while array.size(fX1) > maxZ
-        array.shift(fX1), array.shift(fT), array.shift(fB)
-
-if not na(atr) and math.abs(close - close[sdBaseLen]) > sdImpulse * atr and bar_index - lastSdBar > sdBaseLen + 5
-    float bT = high[1]
-    float bB = low[1]
-    for k = 1 to sdBaseLen
-        bT := math.max(bT, high[k])
-        bB := math.min(bB, low[k])
-    bool up = close > close[sdBaseLen]
-    array.push(sX1, bar_index - sdBaseLen), array.push(sT, bT), array.push(sB, bB), array.push(sD, up ? 1 : -1)
-    lastSdBar := bar_index
-    while array.size(sX1) > maxZ
-        array.shift(sX1), array.shift(sT), array.shift(sB), array.shift(sD)
-
-// ---- patterns ----
-f_slope(array<int> xs, array<float> ys) =>
-    int n = array.size(xs)
-    float sx = 0.0
-    float sy = 0.0
-    float sxx = 0.0
-    float sxy = 0.0
-    for i = 0 to n - 1
-        float x = array.get(xs, i)
-        float y = array.get(ys, i)
-        sx += x
-        sy += y
-        sxx += x * x
-        sxy += x * y
-    float den = n * sxx - sx * sx
-    den == 0 ? 0.0 : (n * sxy - sx * sy) / den
-
+// ============================== PATTERN NAMES ==============================
 f_patName(int id) =>
     switch id
         1  => "Ascending Triangle"
@@ -480,204 +292,132 @@ f_patName(int id) =>
 f_patFam(int id) => id == 3 or id == 7 ? "Flag" : id >= 9 ? "Reversal" : "Triangle / Wedge"
 f_wantFam(int id) => patFam == "All" or f_patFam(id) == patFam
 
-if showPat and newPivot and not na(atr) and array.size(swX) >= 3
-    int n = array.size(swX)
-    int xA = array.get(swX, n - 3)
-    int xB = array.get(swX, n - 2)
-    int xC = array.get(swX, n - 1)
-    float yA = array.get(swY, n - 3)
-    float yB = array.get(swY, n - 2)
-    float yC = array.get(swY, n - 1)
-    int dA = array.get(swD, n - 3)
-    int dB = array.get(swD, n - 2)
-    int dC = array.get(swD, n - 1)
-    bool drawn = false
+f_patDraw(int id, int kind, int n, int x1, float y1, int x2, float y2, int x3, float y3, int x4, float y4, int x5, float y5) =>
+    float hiY = na
+    float loY = na
+    int lastX = x1
+    if kind == 0
+        for j = 1 to n - 1
+            int xa = j == 1 ? x1 : j == 2 ? x2 : j == 3 ? x3 : x4
+            float ya = j == 1 ? y1 : j == 2 ? y2 : j == 3 ? y3 : y4
+            int xb = j == 1 ? x2 : j == 2 ? x3 : j == 3 ? x4 : x5
+            float yb = j == 1 ? y2 : j == 2 ? y3 : j == 3 ? y4 : y5
+            f_line(xa, ya, xb, yb, patCol, line.style_solid, patWidth)
+            hiY := na(hiY) ? math.max(ya, yb) : math.max(hiY, math.max(ya, yb))
+            loY := na(loY) ? math.min(ya, yb) : math.min(loY, math.min(ya, yb))
+            lastX := xb
+    else
+        f_line(x1, y1, x2, y2, patCol, line.style_solid, patWidth)
+        f_line(x3, y3, x4, y4, patCol, line.style_solid, patWidth)
+        hiY := math.max(y1, y2)
+        loY := math.min(y3, y4)
+        lastX := math.max(x2, x4)
+    if showPatName and not na(hiY) and not na(loY)
+        f_lab(math.round((x1 + lastX) / 2), (hiY + loY) / 2, f_patName(id), patNameCol, label.style_label_center, f_size(patSize))
+    true
 
-    if dA == 1 and dB == -1 and dC == 1 and math.abs(yC - yA) <= patTol * atr and yA - yB > patMinH * atr and f_wantFam(13)
-        f_pushPat(13, 0, 3, xA, yA, xB, yB, xC, yC, int(na), float(na), int(na), float(na))
-        drawn := true
-    if not drawn and dA == -1 and dB == 1 and dC == -1 and math.abs(yC - yA) <= patTol * atr and yB - yA > patMinH * atr and f_wantFam(9)
-        f_pushPat(9, 0, 3, xA, yA, xB, yB, xC, yC, int(na), float(na), int(na), float(na))
-        drawn := true
+f_slope(array<int> xs, array<float> ys) =>
+    int n = array.size(xs)
+    float sx = 0.0
+    float sy = 0.0
+    float sxx = 0.0
+    float sxy = 0.0
+    for i = 0 to n - 1
+        float x = array.get(xs, i)
+        float y = array.get(ys, i)
+        sx += x
+        sy += y
+        sxx += x * x
+        sxy += x * y
+    float den = n * sxx - sx * sx
+    den == 0 ? 0.0 : (n * sxy - sx * sy) / den
 
-    if not drawn and n >= 5
-        int a1 = array.get(swX, n - 5)
-        int a2 = array.get(swX, n - 4)
-        int a3 = array.get(swX, n - 3)
-        int a4 = array.get(swX, n - 2)
-        int a5 = array.get(swX, n - 1)
-        float p1 = array.get(swY, n - 5)
-        float p2 = array.get(swY, n - 4)
-        float p3 = array.get(swY, n - 3)
-        float p4 = array.get(swY, n - 2)
-        float p5 = array.get(swY, n - 1)
-        int q1 = array.get(swD, n - 5)
-        int q3 = array.get(swD, n - 3)
-        int q5 = array.get(swD, n - 1)
-        if q1 == 1 and q3 == 1 and q5 == 1 and p3 > p1 and p3 > p5 and math.abs(p1 - p5) <= patTol * atr * 2 and math.min(p1, p5) - math.min(p2, p4) > patMinH * atr and f_wantFam(15)
-            f_pushPat(15, 0, 5, a1, p1, a2, p2, a3, p3, a4, p4, a5, p5)
-            drawn := true
-        if not drawn and q1 == -1 and q3 == -1 and q5 == -1 and p3 < p1 and p3 < p5 and math.abs(p1 - p5) <= patTol * atr * 2 and math.max(p2, p4) - math.max(p1, p5) > patMinH * atr and f_wantFam(11)
-            f_pushPat(11, 0, 5, a1, p1, a2, p2, a3, p3, a4, p4, a5, p5)
-            drawn := true
+// ============================== STATE ==============================
+var float lastH = na
+var int   lastHx = na
+var float lastL = na
+var int   lastLx = na
+var int   trend = 0
+var int   hTaken = -1
+var int   lTaken = -1
 
-    if not drawn and n >= 4
-        array<int> hx = array.new_int()
-        array<float> hy = array.new_float()
-        array<int> lx = array.new_int()
-        array<float> ly = array.new_float()
-        for i = n - 4 to n - 1
-            if array.get(swD, i) == 1
-                array.push(hx, array.get(swX, i)), array.push(hy, array.get(swY, i))
-            else
-                array.push(lx, array.get(swX, i)), array.push(ly, array.get(swY, i))
-        if array.size(hx) >= 2 and array.size(lx) >= 2
-            float sH = f_slope(hx, hy)
-            float sL = f_slope(lx, ly)
-            int xa = math.min(array.get(hx, 0), array.get(lx, 0))
-            int xb = bar_index + zoneExt
-            float h0 = array.get(hy, 0)
-            float l0 = array.get(ly, 0)
-            float hA = h0 + sH * (xa - array.get(hx, 0))
-            float lA = l0 + sL * (xa - array.get(lx, 0))
-            float hB = h0 + sH * (xb - array.get(hx, 0))
-            float lB = l0 + sL * (xb - array.get(lx, 0))
-            float flat = atr * 0.15
-            if math.abs(hA - lA) > patMinH * atr
-                int id = 0
-                if math.abs(sH) < flat and sL > flat
-                    id := 1
-                else if math.abs(sL) < flat and sH < -flat
-                    id := 5
-                else if sH < -flat and sL > flat
-                    id := 4
-                else if sH > flat and sL > flat and sH < sL
-                    id := 12
-                else if sH < -flat and sL < -flat and sH > sL
-                    id := 16
-                if id != 0 and f_wantFam(id)
-                    f_pushPat(id, 1, 4, xa, hA, xb, hB, xa, lA, xb, lB, int(na), float(na))
-                    drawn := true
+var float prevHiVal = na
+var int   prevHiIdx = na
+var float prevLoVal = na
+var int   prevLoIdx = na
 
-    if not drawn and n >= 4
-        int f1 = array.get(swX, n - 4)
-        int f2 = array.get(swX, n - 3)
-        int f3 = array.get(swX, n - 2)
-        int f4 = array.get(swX, n - 1)
-        float v1 = array.get(swY, n - 4)
-        float v2 = array.get(swY, n - 3)
-        float v3 = array.get(swY, n - 2)
-        float v4 = array.get(swY, n - 1)
-        int e1 = array.get(swD, n - 4)
-        int e2 = array.get(swD, n - 3)
-        int e3 = array.get(swD, n - 2)
-        int e4 = array.get(swD, n - 1)
-        float pole = math.abs(v2 - v1)
-        bool bullPole = e1 == -1 and e2 == 1 and v2 > v1
-        bool bearPole = e1 == 1 and e2 == -1 and v1 > v2
-        if pole > 3.0 * atr and e3 != e4 and f4 > f3
-            if bullPole and e3 == -1 and e4 == 1 and v3 > v1 and (v2 - v3) < 0.5 * pole and f_wantFam(3)
-                f_pushPat(3, 0, 4, f1, v1, f2, v2, f3, v3, f4, v4, int(na), float(na))
-                drawn := true
-            if not drawn and bearPole and e3 == 1 and e4 == -1 and v3 < v1 and (v3 - v2) < 0.5 * pole and f_wantFam(7)
-                f_pushPat(7, 0, 4, f1, v1, f2, v2, f3, v3, f4, v4, int(na), float(na))
+var float iLastH = na
+var int   iLastHx = na
+var float iLastL = na
+var int   iLastLx = na
+var int   iTrend = 0
+var int   iHTaken = -1
+var int   iLTaken = -1
 
-// ============================== PASS 2 - RENDER ==============================
-if barstate.islast
-    f_clearAll()
-    int right = bar_index + zoneExt
+var float trTop = na
+var int   trTopX = na
+var float trBot = na
+var int   trBotX = na
 
-    if showInt and array.size(iX1) > 0
-        for i = 0 to array.size(iX1) - 1
-            int kind = array.get(iKind, i)
-            int dir = array.get(iDir, i)
-            if (kind == 1 and showBOS) or (kind == 2 and showCHoCH)
-                color hue = dir == 1 ? inBullCol : inBearCol
-                f_line(array.get(iX1, i), array.get(iY, i), array.get(iX2, i), array.get(iY, i), hue, f_sty(inStyle), inWidth)
-                f_lab(math.round((array.get(iX1, i) + array.get(iX2, i)) / 2), array.get(iY, i),
-                     kind == 1 ? "BOS" : "CHoCH", hue,
-                     dir == 1 ? label.style_label_down : label.style_label_up, f_size(inSize))
+var int lastSdBar = -999
 
-    if array.size(bX1) > 0
-        for i = 0 to array.size(bX1) - 1
-            int kind = array.get(bKind, i)
-            int dir = array.get(bDir, i)
-            if (kind == 1 and showBOS) or (kind == 2 and showCHoCH)
-                color hue = dir == 1 ? swBullCol : swBearCol
-                f_line(array.get(bX1, i), array.get(bY, i), array.get(bX2, i), array.get(bY, i), hue, line.style_solid, swWidth)
-                f_lab(math.round((array.get(bX1, i) + array.get(bX2, i)) / 2), array.get(bY, i),
-                     kind == 1 ? "BOS" : "CHoCH", hue,
-                     dir == 1 ? label.style_label_down : label.style_label_up, f_size(swSize))
+// pivots must be evaluated at global scope
+ph  = ta.pivothigh(high, pivLen, pivLen)
+pl  = ta.pivotlow(low, pivLen, pivLen)
+phi = ta.pivothigh(high, pivInt, pivInt)
+pli = ta.pivotlow(low, pivInt, pivInt)
 
-    if (showEQH or showEQL) and not na(atr) and array.size(swX) > 0
-        int prevHi = -1
-        int prevLo = -1
-        for i = 0 to array.size(swX) - 1
-            int d = array.get(swD, i)
-            int xi = array.get(swX, i)
-            float yi = array.get(swY, i)
-            if d == 1
-                if prevHi >= 0 and showEQH
-                    float yp = array.get(swY, prevHi)
-                    int xp = array.get(swX, prevHi)
-                    if math.abs(yi - yp) <= eqTol * atr and xi > xp
-                        f_line(xp, yp, xi, yi, eqhCol, f_sty(eqStyle), eqWidth)
-                        f_lab(math.round((xp + xi) / 2), math.max(yi, yp), "EQH", eqhCol, label.style_label_down, f_size(eqSize))
-                prevHi := i
-            else
-                if prevLo >= 0 and showEQL
-                    float yp = array.get(swY, prevLo)
-                    int xp = array.get(swX, prevLo)
-                    if math.abs(yi - yp) <= eqTol * atr and xi > xp
-                        f_line(xp, yp, xi, yi, eqlCol, f_sty(eqStyle), eqWidth)
-                        f_lab(math.round((xp + xi) / 2), math.min(yi, yp), "EQL", eqlCol, label.style_label_up, f_size(eqSize))
-                prevLo := i
+// ============================== DETECT + DRAW ==============================
+if barstate.isconfirmed
+    // ---- trailing extremes (where Strong/Weak sit) ----
+    if not na(ph)
+        trTop := ph
+        trTopX := bar_index - pivLen
+    if not na(pl)
+        trBot := pl
+        trBotX := bar_index - pivLen
+    if na(trTop) or high > trTop
+        trTop := high
+        trTopX := bar_index
+    if na(trBot) or low < trBot
+        trBot := low
+        trBotX := bar_index
 
-    if (showSWHigh or showSWLow) and not na(trTop) and not na(trBot)
-        bool bullTrend = trend >= 0
+    // ---- swing pivots: EQH / EQL, Strong-Weak, Liquidity ----
+    if not na(ph)
+        int px = bar_index - pivLen
+        if showEQH and not na(atr) and not na(prevHiVal) and math.abs(ph - prevHiVal) <= eqTol * atr
+            f_line(prevHiIdx, prevHiVal, px, ph, eqhCol, f_sty(eqStyle), eqWidth)
+            f_lab(math.round((prevHiIdx + px) / 2), math.max(ph, prevHiVal), "EQH", eqhCol, label.style_label_down, f_size(eqSize))
         if showSWHigh
-            f_line(trTopX, trTop, right, trTop, swHighCol, line.style_solid, swWsWidth)
-            f_lab(right, trTop, bullTrend ? "Weak High" : "Strong High", swHighCol, label.style_label_down, f_size(swWsSize))
+            f_lab(px, ph, trend >= 0 ? "Weak High" : "Strong High", swHighCol, label.style_label_down, f_size(swWsSize))
+        if showLQZ and not na(atr)
+            float pad = atr * lqzPad
+            f_box(px, ph + pad, px + zoneExt, ph - pad, color.new(lqzUpCol, lqzTrans))
+            f_zone(px, ph + pad, px + zoneExt, ph - pad, "Liq", lqzUpCol)
+        prevHiVal := ph
+        prevHiIdx := px
+        lastH := ph
+        lastHx := px
+
+    if not na(pl)
+        int px = bar_index - pivLen
+        if showEQL and not na(atr) and not na(prevLoVal) and math.abs(pl - prevLoVal) <= eqTol * atr
+            f_line(prevLoIdx, prevLoVal, px, pl, eqlCol, f_sty(eqStyle), eqWidth)
+            f_lab(math.round((prevLoIdx + px) / 2), math.min(pl, prevLoVal), "EQL", eqlCol, label.style_label_up, f_size(eqSize))
         if showSWLow
-            f_line(trBotX, trBot, right, trBot, swLowCol, line.style_solid, swWsWidth)
-            f_lab(right, trBot, bullTrend ? "Strong Low" : "Weak Low", swLowCol, label.style_label_up, f_size(swWsSize))
+            f_lab(px, pl, trend >= 0 ? "Strong Low" : "Weak Low", swLowCol, label.style_label_up, f_size(swWsSize))
+        if showLQZ and not na(atr)
+            float pad = atr * lqzPad
+            f_box(px, pl + pad, px + zoneExt, pl - pad, color.new(lqzDnCol, lqzTrans))
+            f_zone(px, pl + pad, px + zoneExt, pl - pad, "Liq", lqzDnCol)
+        prevLoVal := pl
+        prevLoIdx := px
+        lastL := pl
+        lastLx := px
 
-    if showLQZ and not na(atr) and not na(lastH) and not na(lastL)
-        float pad = atr * lqzPad
-        if hTaken != lastHx
-            f_box(lastHx, lastH + pad, right, lastH - pad, color.new(lqzUpCol, lqzTrans))
-            f_zone(lastHx, lastH + pad, right, lastH - pad, "Liq", lqzUpCol)
-        if lTaken != lastLx
-            f_box(lastLx, lastL + pad, right, lastL - pad, color.new(lqzDnCol, lqzTrans))
-            f_zone(lastLx, lastL + pad, right, lastL - pad, "Liq", lqzDnCol)
-
-    if showFVG and array.size(fX1) > 0
-        for i = 0 to array.size(fX1) - 1
-            int x = array.get(fX1, i)
-            float t = array.get(fT, i)
-            float b = array.get(fB, i)
-            f_box(x, t, right, b, color.new(fvgCol, fvgTrans))
-            f_zone(x, t, right, b, "FVG", fvgCol)
-
-    if showOB and array.size(oX1) > 0
-        for i = 0 to array.size(oX1) - 1
-            int x = array.get(oX1, i)
-            float t = array.get(oT, i)
-            float b = array.get(oB, i)
-            f_box(x, t, right, b, color.new(obCol, obTrans))
-            f_zone(x, t, right, b, "ODB", obCol)
-
-    if showSD and array.size(sX1) > 0
-        for i = 0 to array.size(sX1) - 1
-            int x = array.get(sX1, i)
-            float t = array.get(sT, i)
-            float b = array.get(sB, i)
-            bool up = array.get(sD, i) == 1
-            color hue = up ? sdDemCol : sdSupCol
-            f_box(x, t, right, b, color.new(hue, sdTrans))
-            f_zone(x, t, right, b, up ? "Demand" : "Supply", hue)
-
-    if showFib and not na(trTop) and not na(trBot) and trTop > trBot
+    // ---- premium / discount + OTE on the then-current dealing range ----
+    if (not na(ph) or not na(pl)) and showFib and not na(trTop) and not na(trBot) and trTop > trBot
         float rng = trTop - trBot
         float eq = trBot + rng * 0.5
         bool bull = trend >= 0
@@ -686,66 +426,220 @@ if barstate.islast
         float lvB = bull ? trBot + rng * (1.0 - fibHi) : trBot + rng * fibHi
         float oLo = math.min(lvA, lvB)
         float oHi = math.max(lvA, lvB)
-        int lx = math.min(trTopX, trBotX)
-        f_box(lx, trTop, right, eq, color.new(premCol, pdTrans))
-        f_box(lx, eq, right, trBot, color.new(discCol, pdTrans))
-        f_zone(lx, trTop, right, eq, "PREMIUM  sell", premCol)
-        f_zone(lx, eq, right, trBot, "DISCOUNT  buy", discCol)
+        int lx = bar_index - pivLen
+        int rx = bar_index + zoneExt
+        f_pBox(lx, trTop, rx, eq, color.new(premCol, pdTrans))
+        f_pBox(lx, eq, rx, trBot, color.new(discCol, pdTrans))
+        f_pZone(lx, trTop, rx, eq, "PREMIUM  sell", premCol)
+        f_pZone(lx, eq, rx, trBot, "DISCOUNT  buy", discCol)
         if showOTE
-            f_box(lx, oHi, right, oLo, color.new(oteCol, oteTrans))
-            f_zone(lx, oHi, right, oLo, "OTE " + str.tostring(fibLo, "#.###") + " - " + str.tostring(fibHi, "#.###"), oteCol)
-        f_line(lx, eq, right, eq, eqCol, line.style_dashed, 1)
+            f_pBox(lx, oHi, rx, oLo, color.new(oteCol, oteTrans))
+            f_pZone(lx, oHi, rx, oLo, "OTE " + str.tostring(fibLo, "#.###") + " - " + str.tostring(fibHi, "#.###"), oteCol)
+        f_pLine(lx, eq, rx, eq, eqCol, line.style_dashed, 1)
         if showFibLb
-            f_lab(right, eq, "Equilibrium", eqCol, label.style_label_left, size.tiny)
+            f_pLab(rx, eq, "Equilibrium", eqCol, label.style_label_left, size.tiny)
         if showFibLn
-            f_line(lx, lvA, right, lvA, color.new(fibLnCol, fibLnTrans), line.style_dotted, 1)
-            f_line(lx, lvB, right, lvB, color.new(fibLnCol, fibLnTrans), line.style_dotted, 1)
+            f_pLine(lx, lvA, rx, lvA, color.new(fibLnCol, fibLnTrans), line.style_dotted, 1)
+            f_pLine(lx, lvB, rx, lvB, color.new(fibLnCol, fibLnTrans), line.style_dotted, 1)
         if showFibLb
-            f_lab(right, lvA, str.tostring(fibLo, "#.###"), color.new(fibLbCol, 35), label.style_label_left, size.tiny)
-            f_lab(right, lvB, str.tostring(fibHi, "#.###"), color.new(fibLbCol, 35), label.style_label_left, size.tiny)
-            f_lab(right, trTop, "1.0", color.new(fibLbCol, 25), label.style_label_left, size.tiny)
-            f_lab(right, trBot, "0.0", color.new(fibLbCol, 25), label.style_label_left, size.tiny)
+            f_pLab(rx, lvA, str.tostring(fibLo, "#.###"), color.new(fibLbCol, 35), label.style_label_left, size.tiny)
+            f_pLab(rx, lvB, str.tostring(fibHi, "#.###"), color.new(fibLbCol, 35), label.style_label_left, size.tiny)
+            f_pLab(rx, trTop, "1.0", color.new(fibLbCol, 25), label.style_label_left, size.tiny)
+            f_pLab(rx, trBot, "0.0", color.new(fibLbCol, 25), label.style_label_left, size.tiny)
         if showFibSD
             for k = 1 to 3
                 float mult = k == 1 ? 0.5 : k == 2 ? 1.0 : 1.5
                 float lvl = bull ? trBot - rng * mult : trTop + rng * mult
-                f_line(lx, lvl, right, lvl, color.new(sdTgtCol, 45), line.style_dotted, 1)
-                f_lab(right, lvl, "-" + str.tostring(mult, "#.#") + " SD", color.new(sdTgtCol, 30), label.style_label_left, size.tiny)
+                f_pLine(lx, lvl, rx, lvl, color.new(sdTgtCol, 45), line.style_dotted, 1)
+                f_pLab(rx, lvl, "-" + str.tostring(mult, "#.#") + " SD", color.new(sdTgtCol, 30), label.style_label_left, size.tiny)
 
-    if array.size(pId) > 0
-        for i = 0 to array.size(pId) - 1
-            int id = array.get(pId, i)
-            float hiY = na
-            float loY = na
-            int firstX = array.get(pX1, i)
-            int lastX = firstX
-            if array.get(pKind, i) == 0
-                int cnt = array.get(pN, i)
-                for j = 1 to cnt - 1
-                    int xa = j == 1 ? array.get(pX1, i) : j == 2 ? array.get(pX2, i) : j == 3 ? array.get(pX3, i) : array.get(pX4, i)
-                    float ya = j == 1 ? array.get(pY1, i) : j == 2 ? array.get(pY2, i) : j == 3 ? array.get(pY3, i) : array.get(pY4, i)
-                    int xb = j == 1 ? array.get(pX2, i) : j == 2 ? array.get(pX3, i) : j == 3 ? array.get(pX4, i) : array.get(pX5, i)
-                    float yb = j == 1 ? array.get(pY2, i) : j == 2 ? array.get(pY3, i) : j == 3 ? array.get(pY4, i) : array.get(pY5, i)
-                    f_line(xa, ya, xb, yb, patCol, line.style_solid, patWidth)
-                    hiY := na(hiY) ? math.max(ya, yb) : math.max(hiY, math.max(ya, yb))
-                    loY := na(loY) ? math.min(ya, yb) : math.min(loY, math.min(ya, yb))
-                    lastX := xb
-            else
-                int xa = array.get(pX1, i)
-                float hA = array.get(pY1, i)
-                int xb = array.get(pX2, i)
-                float hB = array.get(pY2, i)
-                int xc = array.get(pX3, i)
-                float lA = array.get(pY3, i)
-                int xd = array.get(pX4, i)
-                float lB = array.get(pY4, i)
-                f_line(xa, hA, xb, hB, patCol, line.style_solid, patWidth)
-                f_line(xc, lA, xd, lB, patCol, line.style_solid, patWidth)
-                hiY := math.max(hA, hB)
-                loY := math.min(lA, lB)
-                lastX := math.max(xb, xd)
-            if showPatName and not na(hiY) and not na(loY)
-                f_lab(math.round((firstX + lastX) / 2), (hiY + loY) / 2, f_patName(id), patNameCol, label.style_label_center, f_size(patSize))</script>
+    // ---- swing BOS / CHoCH + order block ----
+    if not na(lastH) and close > lastH and hTaken != lastHx
+        bool cont = trend == 1
+        color hue = cont ? swBullCol : swBearCol
+        if (cont and showBOS) or (not cont and showCHoCH)
+            f_line(lastHx, lastH, bar_index, lastH, hue, line.style_solid, swWidth)
+            f_lab(math.round((lastHx + bar_index) / 2), lastH, cont ? "BOS" : "CHoCH", hue, label.style_label_down, f_size(swSize))
+        if showOB
+            int obi = na
+            for k = 1 to obLook
+                if close[k] < open[k]
+                    obi := k
+                    break
+            if not na(obi)
+                f_box(bar_index - obi, high[obi], bar_index + zoneExt, low[obi], color.new(obCol, obTrans))
+                f_zone(bar_index - obi, high[obi], bar_index + zoneExt, low[obi], "ODB", obCol)
+        hTaken := lastHx
+        trend := 1
+
+    if not na(lastL) and close < lastL and lTaken != lastLx
+        bool cont = trend == -1
+        color hue = cont ? swBearCol : swBullCol
+        if (cont and showBOS) or (not cont and showCHoCH)
+            f_line(lastLx, lastL, bar_index, lastL, hue, line.style_solid, swWidth)
+            f_lab(math.round((lastLx + bar_index) / 2), lastL, cont ? "BOS" : "CHoCH", hue, label.style_label_up, f_size(swSize))
+        if showOB
+            int obi = na
+            for k = 1 to obLook
+                if close[k] > open[k]
+                    obi := k
+                    break
+            if not na(obi)
+                f_box(bar_index - obi, high[obi], bar_index + zoneExt, low[obi], color.new(obCol, obTrans))
+                f_zone(bar_index - obi, high[obi], bar_index + zoneExt, low[obi], "ODB", obCol)
+        lTaken := lastLx
+        trend := -1
+
+    // ---- internal structure ----
+    if showInt
+        if not na(phi)
+            iLastH := phi
+            iLastHx := bar_index - pivInt
+        if not na(pli)
+            iLastL := pli
+            iLastLx := bar_index - pivInt
+        if not na(iLastH) and close > iLastH and iHTaken != iLastHx
+            bool cont = iTrend == 1
+            if (cont and showBOS) or (not cont and showCHoCH)
+                color hue = cont ? inBullCol : inBearCol
+                f_line(iLastHx, iLastH, bar_index, iLastH, hue, f_sty(inStyle), inWidth)
+                f_lab(math.round((iLastHx + bar_index) / 2), iLastH, cont ? "BOS" : "CHoCH", hue, label.style_label_down, f_size(inSize))
+            iHTaken := iLastHx
+            iTrend := 1
+        if not na(iLastL) and close < iLastL and iLTaken != iLastLx
+            bool cont = iTrend == -1
+            if (cont and showBOS) or (not cont and showCHoCH)
+                color hue = cont ? inBearCol : inBullCol
+                f_line(iLastLx, iLastL, bar_index, iLastL, hue, f_sty(inStyle), inWidth)
+                f_lab(math.round((iLastLx + bar_index) / 2), iLastL, cont ? "BOS" : "CHoCH", hue, label.style_label_up, f_size(inSize))
+            iLTaken := iLastLx
+            iTrend := -1
+
+    // ---- fair value gaps ----
+    if showFVG
+        if low > high[2] and close[1] > open[1]
+            f_box(bar_index - 2, low, bar_index + zoneExt, high[2], color.new(fvgCol, fvgTrans))
+            f_zone(bar_index - 2, low, bar_index + zoneExt, high[2], "FVG", fvgCol)
+        if high < low[2] and close[1] < open[1]
+            f_box(bar_index - 2, low[2], bar_index + zoneExt, high, color.new(fvgCol, fvgTrans))
+            f_zone(bar_index - 2, low[2], bar_index + zoneExt, high, "FVG", fvgCol)
+
+    // ---- supply & demand ----
+    if showSD and not na(atr) and math.abs(close - close[sdBaseLen]) > sdImpulse * atr and bar_index - lastSdBar > sdBaseLen + 5
+        float bT = high[1]
+        float bB = low[1]
+        for k = 1 to sdBaseLen
+            bT := math.max(bT, high[k])
+            bB := math.min(bB, low[k])
+        bool up = close > close[sdBaseLen]
+        color hue = up ? sdDemCol : sdSupCol
+        f_box(bar_index - sdBaseLen, bT, bar_index + zoneExt, bB, color.new(hue, sdTrans))
+        f_zone(bar_index - sdBaseLen, bT, bar_index + zoneExt, bB, up ? "Demand" : "Supply", hue)
+        lastSdBar := bar_index
+
+    // ---- patterns ----
+    if showPat and not na(atr) and (not na(ph) or not na(pl))
+        int n = 0
+        // rebuild a small swing list from the last confirmed pivots
+        // (kept in local arrays so the pattern scan is self-contained)
+        var array<int>   patX = array.new_int()
+        var array<float> patY = array.new_float()
+        var array<int>   patD = array.new_int()
+        if not na(ph)
+            array.push(patX, bar_index - pivLen)
+            array.push(patY, ph)
+            array.push(patD, 1)
+        else
+            array.push(patX, bar_index - pivLen)
+            array.push(patY, pl)
+            array.push(patD, -1)
+        while array.size(patX) > 12
+            array.shift(patX)
+            array.shift(patY)
+            array.shift(patD)
+        n := array.size(patX)
+        if n >= 3
+            int xA = array.get(patX, n - 3)
+            int xB = array.get(patX, n - 2)
+            int xC = array.get(patX, n - 1)
+            float yA = array.get(patY, n - 3)
+            float yB = array.get(patY, n - 2)
+            float yC = array.get(patY, n - 1)
+            int dA = array.get(patD, n - 3)
+            int dB = array.get(patD, n - 2)
+            int dC = array.get(patD, n - 1)
+            bool drawn = false
+            if dA == 1 and dB == -1 and dC == 1 and math.abs(yC - yA) <= patTol * atr and yA - yB > patMinH * atr and f_wantFam(13)
+                f_patDraw(13, 0, 3, xA, yA, xB, yB, xC, yC, int(na), float(na), int(na), float(na))
+                drawn := true
+            if not drawn and dA == -1 and dB == 1 and dC == -1 and math.abs(yC - yA) <= patTol * atr and yB - yA > patMinH * atr and f_wantFam(9)
+                f_patDraw(9, 0, 3, xA, yA, xB, yB, xC, yC, int(na), float(na), int(na), float(na))
+                drawn := true
+            if not drawn and n >= 5
+                int a1 = array.get(patX, n - 5), a2 = array.get(patX, n - 4), a3 = array.get(patX, n - 3)
+                int a4 = array.get(patX, n - 2), a5 = array.get(patX, n - 1)
+                float p1 = array.get(patY, n - 5), p2 = array.get(patY, n - 4), p3 = array.get(patY, n - 3)
+                float p4 = array.get(patY, n - 2), p5 = array.get(patY, n - 1)
+                int q1 = array.get(patD, n - 5), q3 = array.get(patD, n - 3), q5 = array.get(patD, n - 1)
+                if q1 == 1 and q3 == 1 and q5 == 1 and p3 > p1 and p3 > p5 and math.abs(p1 - p5) <= patTol * atr * 2 and math.min(p1, p5) - math.min(p2, p4) > patMinH * atr and f_wantFam(15)
+                    f_patDraw(15, 0, 5, a1, p1, a2, p2, a3, p3, a4, p4, a5, p5)
+                    drawn := true
+                if not drawn and q1 == -1 and q3 == -1 and q5 == -1 and p3 < p1 and p3 < p5 and math.abs(p1 - p5) <= patTol * atr * 2 and math.max(p2, p4) - math.max(p1, p5) > patMinH * atr and f_wantFam(11)
+                    f_patDraw(11, 0, 5, a1, p1, a2, p2, a3, p3, a4, p4, a5, p5)
+                    drawn := true
+            if not drawn and n >= 4
+                array<int> hx = array.new_int()
+                array<float> hy = array.new_float()
+                array<int> lx = array.new_int()
+                array<float> ly = array.new_float()
+                for i = n - 4 to n - 1
+                    if array.get(patD, i) == 1
+                        array.push(hx, array.get(patX, i))
+                        array.push(hy, array.get(patY, i))
+                    else
+                        array.push(lx, array.get(patX, i))
+                        array.push(ly, array.get(patY, i))
+                if array.size(hx) >= 2 and array.size(lx) >= 2
+                    float sH = f_slope(hx, hy)
+                    float sL = f_slope(lx, ly)
+                    int xa = math.min(array.get(hx, 0), array.get(lx, 0))
+                    int xb = bar_index + zoneExt
+                    float h0 = array.get(hy, 0)
+                    float l0 = array.get(ly, 0)
+                    float hA = h0 + sH * (xa - array.get(hx, 0))
+                    float lA = l0 + sL * (xa - array.get(lx, 0))
+                    float hB = h0 + sH * (xb - array.get(hx, 0))
+                    float lB = l0 + sL * (xb - array.get(lx, 0))
+                    float flat = atr * 0.15
+                    if math.abs(hA - lA) > patMinH * atr
+                        int id = 0
+                        if math.abs(sH) < flat and sL > flat
+                            id := 1
+                        else if math.abs(sL) < flat and sH < -flat
+                            id := 5
+                        else if sH < -flat and sL > flat
+                            id := 4
+                        else if sH > flat and sL > flat and sH < sL
+                            id := 12
+                        else if sH < -flat and sL < -flat and sH > sL
+                            id := 16
+                        if id != 0 and f_wantFam(id)
+                            f_patDraw(id, 1, 4, xa, hA, xb, hB, xa, lA, xb, lB, int(na), float(na))
+                            drawn := true
+            if not drawn and n >= 4
+                int f1 = array.get(patX, n - 4), f2 = array.get(patX, n - 3), f3 = array.get(patX, n - 2), f4 = array.get(patX, n - 1)
+                float v1 = array.get(patY, n - 4), v2 = array.get(patY, n - 3), v3 = array.get(patY, n - 2), v4 = array.get(patY, n - 1)
+                int e1 = array.get(patD, n - 4), e2 = array.get(patD, n - 3), e3 = array.get(patD, n - 2), e4 = array.get(patD, n - 1)
+                float pole = math.abs(v2 - v1)
+                if pole > 3.0 * atr and e3 != e4 and f4 > f3
+                    if e1 == -1 and e2 == 1 and v2 > v1 and e3 == -1 and e4 == 1 and v3 > v1 and (v2 - v3) < 0.5 * pole and f_wantFam(3)
+                        f_patDraw(3, 0, 4, f1, v1, f2, v2, f3, v3, f4, v4, int(na), float(na))
+                        drawn := true
+                    if not drawn and e1 == 1 and e2 == -1 and v1 > v2 and e3 == 1 and e4 == -1 and v3 < v1 and (v3 - v2) < 0.5 * pole and f_wantFam(7)
+                        f_patDraw(7, 0, 4, f1, v1, f2, v2, f3, v3, f4, v4, int(na), float(na))
+
+// keep the object count inside TradingView's hard limits
+f_cap()</script>
 <script>
 const CODE = document.getElementById('src').textContent;
 const ta  = document.getElementById('code');
