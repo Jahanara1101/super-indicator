@@ -27,7 +27,7 @@
 </head>
 <body>
 <h1>MASTER - SMC + Patterns + Volume</h1>
-<p class="meta">638 lines &middot; 27539 characters &middot; //@version=6</p>
+<p class="meta">704 lines &middot; 32472 characters &middot; //@version=6</p>
 <ol>
   <li>Tap <b>COPY</b> below</li>
   <li>Open TradingView &rarr; <b>Pine Editor</b></li>
@@ -50,73 +50,160 @@ indicator("MASTER - SMC + Patterns + Volume", "MASTER", overlay=false, max_boxes
 //   Pass 2 (last bar): wipe every drawing and rebuild from the state arrays.
 //   Rebuilding instead of appending keeps the object count inside
 //   TradingView's per-type limits and stops zones being redrawn every tick.
+//
+// EVERY drawn element has its own on/off switch, its own colour, its own
+// transparency and its own size/width input. Defaults are red / green / white
+// so the chart looks the same as before until a setting is changed.
 
-// PALETTE - THREE colours only: red, green, white.
-// Nothing else is allowed anywhere in the script, so there is no blue, no
-// orange, no grey and no amber left to clash with anything else on the chart.
-// Every fill is the same hue at high transparency, which is what keeps the
-// candles readable.
-COL_RED   = #F23645
-COL_GREEN = #089981
-COL_WHITE = #FFFFFF
+// ============================== HELPERS ==============================
+f_sty(string s) =>
+    switch s
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_solid
 
-// INPUTS
+f_size(string s) =>
+    switch s
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        => size.large
+
+SIZE_OPTS = "Tiny,Small,Normal,Large"
+STYLE_OPTS = "Solid,Dashed,Dotted"
+
+// ============================== 1 - STRUCTURE ==============================
 gS = "1 - Structure"
 pivLen  = input.int(5, "Swing pivot length", minval=1, maxval=50, group=gS)
 pivInt  = input.int(2, "Internal pivot length", minval=1, maxval=20, group=gS)
 eqTol   = input.float(0.10, "Equal high/low tolerance (x ATR)", minval=0.01, maxval=0.5, step=0.01, group=gS)
 maxKeep = input.int(6, "Structure levels kept", minval=1, maxval=20, group=gS)
+zoneExt = input.int(15, "Zone extension (bars)", minval=2, maxval=300, group=gS)
+maxZ    = input.int(6, "Zones kept per type", minval=1, maxval=30, group=gS)
+txtTrans= input.int(20, "Zone text transparency", minval=0, maxval=100, group=gS)
 
-gM = "2 - Market structure  (turn each on/off)"
-showBOS     = input.bool(true, "BOS", group=gM)
-showCHoCH   = input.bool(true, "CHoCH", group=gM)
-showEQH     = input.bool(true, "EQH - equal highs", group=gM)
-showEQL     = input.bool(true, "EQL - equal lows", group=gM)
-showSWHigh  = input.bool(true, "Strong / Weak High", group=gM)
-showSWLow   = input.bool(true, "Strong / Weak Low", group=gM)
-showInt     = input.bool(true, "Internal structure (dashed, tiny)", group=gM)
+// ============================== 2 - BOS / CHoCH ==============================
+gB = "2 - BOS / CHoCH"
+showBOS     = input.bool(true, "Show BOS", group=gB)
+showCHoCH   = input.bool(true, "Show CHoCH", group=gB)
+showInt     = input.bool(true, "Show internal structure layer", group=gB)
+swBullCol   = input.color(#089981, "Swing bullish colour", group=gB)
+swBearCol   = input.color(#F23645, "Swing bearish colour", group=gB)
+swWidth     = input.int(1, "Swing line width", minval=1, maxval=5, group=gB)
+swSize      = input.string("Small", "Swing label size", options=["Tiny", "Small", "Normal", "Large"], group=gB)
+inBullCol   = input.color(#089981, "Internal bullish colour", group=gB)
+inBearCol   = input.color(#F23645, "Internal bearish colour", group=gB)
+inWidth     = input.int(1, "Internal line width", minval=1, maxval=5, group=gB)
+inSize      = input.string("Tiny", "Internal label size", options=["Tiny", "Small", "Normal", "Large"], group=gB)
+inStyle     = input.string("Dashed", "Internal line style", options=["Solid", "Dashed", "Dotted"], group=gB)
 
-gZ = "3 - Zones  (turn each on/off)"
-showSD  = input.bool(true, "Supply & Demand", group=gZ)
-showFVG = input.bool(true, "Fair Value Gaps (FVG)", group=gZ)
-showOB  = input.bool(true, "Order Blocks (ODB)", group=gZ)
-showLQZ = input.bool(true, "Liquidity Zones (Liq)", group=gZ)
-zoneExt = input.int(15, "Zone extension (bars)", minval=2, maxval=300, group=gZ)
-maxZ    = input.int(6, "Zones kept per type", minval=1, maxval=30, group=gZ)
+// ============================== 3 - EQH / EQL ==============================
+gQ = "3 - Equal highs / lows"
+showEQH  = input.bool(true, "Show EQH (equal highs)", group=gQ)
+showEQL  = input.bool(true, "Show EQL (equal lows)", group=gQ)
+eqhCol   = input.color(#F23645, "EQH colour", group=gQ)
+eqlCol   = input.color(#089981, "EQL colour", group=gQ)
+eqStyle  = input.string("Dotted", "Line style", options=["Solid", "Dashed", "Dotted"], group=gQ)
+eqWidth  = input.int(1, "Line width", minval=1, maxval=5, group=gQ)
+eqSize   = input.string("Tiny", "Label size", options=["Tiny", "Small", "Normal", "Large"], group=gQ)
 
-gF = "4 - Premium / Discount + OTE"
-showFib   = input.bool(true, "Premium / Discount zones", group=gF)
-showOTE   = input.bool(true, "OTE band (0.62 - 0.79)", group=gF)
-showFibSD = input.bool(false, "Standard-deviation targets (-0.5 / -1 / -1.5)", group=gF)
-fibLo     = input.float(0.620, "OTE lower", minval=0.0, maxval=1.0, step=0.001, group=gF)
-fibHi     = input.float(0.790, "OTE upper", minval=0.0, maxval=1.0, step=0.001, group=gF)
+// ============================== 4 - STRONG / WEAK ==============================
+gW = "4 - Strong / Weak highs & lows"
+showSWHigh = input.bool(true, "Show Strong / Weak High", group=gW)
+showSWLow  = input.bool(true, "Show Strong / Weak Low", group=gW)
+swHighCol  = input.color(#F23645, "High colour", group=gW)
+swLowCol   = input.color(#089981, "Low colour", group=gW)
+swWsWidth  = input.int(1, "Line width", minval=1, maxval=5, group=gW)
+swWsSize   = input.string("Tiny", "Label size", options=["Tiny", "Small", "Normal", "Large"], group=gW)
 
-gP = "5 - Patterns"
-showPat = input.bool(true, "Draw chart patterns", group=gP)
-patFam  = input.string("All", "Pattern family", options=["All", "Reversal", "Triangle / Wedge", "Flag"], group=gP)
-patTol  = input.float(0.35, "Equal-level tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=gP)
-patMinH = input.float(1.2, "Minimum pattern height (x ATR)", minval=0.2, maxval=10.0, step=0.1, group=gP)
-maxPat  = input.int(4, "Patterns kept", minval=1, maxval=10, group=gP)
+// ============================== 5 - LIQUIDITY ZONES ==============================
+gL = "5 - Liquidity Zones"
+showLQZ  = input.bool(true, "Show Liquidity Zones", group=gL)
+lqzUpCol = input.color(#F23645, "Upper (sell-side) colour", group=gL)
+lqzDnCol = input.color(#089981, "Lower (buy-side) colour", group=gL)
+lqzTrans = input.int(88, "Transparency", minval=0, maxval=100, group=gL)
+lqzPad   = input.float(0.25, "Zone padding (x ATR)", minval=0.0, maxval=3.0, step=0.05, group=gL)
 
-gV = "6 - Volume"
-showVol  = input.bool(true, "Volume columns (buy green / sell red)", group=gV)
-showVolMa= input.bool(true, "Volume average line", group=gV)
-volMaLen = input.int(20, "Volume average length", minval=2, maxval=200, group=gV)
+// ============================== 6 - FVG ==============================
+gFv = "6 - Fair Value Gaps"
+showFVG  = input.bool(true, "Show FVG", group=gFv)
+fvgCol   = input.color(#FFFFFF, "Colour", group=gFv)
+fvgTrans = input.int(88, "Transparency", minval=0, maxval=100, group=gFv)
 
-// VOLUME PANE - buy volume green, sell volume red
+// ============================== 7 - ORDER BLOCKS ==============================
+gO = "7 - Order Blocks"
+showOB   = input.bool(true, "Show Order Blocks (ODB)", group=gO)
+obCol    = input.color(#FFFFFF, "Colour", group=gO)
+obTrans  = input.int(88, "Transparency", minval=0, maxval=100, group=gO)
+obLook   = input.int(25, "Search back for the block (bars)", minval=1, maxval=60, group=gO)
+
+// ============================== 8 - SUPPLY & DEMAND ==============================
+gD = "8 - Supply & Demand"
+showSD    = input.bool(true, "Show Supply & Demand", group=gD)
+sdDemCol  = input.color(#089981, "Demand colour", group=gD)
+sdSupCol  = input.color(#F23645, "Supply colour", group=gD)
+sdTrans   = input.int(88, "Transparency", minval=0, maxval=100, group=gD)
+sdBaseLen = input.int(6, "Base length (bars)", minval=2, maxval=30, group=gD)
+sdImpulse = input.float(2.0, "Impulse threshold (x ATR)", minval=0.5, maxval=10.0, step=0.1, group=gD)
+
+// ============================== 9 - PREMIUM / DISCOUNT + OTE ==============================
+gP2 = "9 - Premium / Discount + OTE"
+showFib   = input.bool(true, "Show Premium / Discount", group=gP2)
+premCol   = input.color(#F23645, "Premium colour", group=gP2)
+discCol   = input.color(#089981, "Discount colour", group=gP2)
+pdTrans   = input.int(88, "Premium / Discount transparency", minval=0, maxval=100, group=gP2)
+eqCol     = input.color(#FFFFFF, "Equilibrium line colour", group=gP2)
+showOTE   = input.bool(true, "Show OTE band", group=gP2)
+oteBullCol= input.color(#089981, "OTE colour (bullish)", group=gP2)
+oteBearCol= input.color(#F23645, "OTE colour (bearish)", group=gP2)
+oteTrans  = input.int(74, "OTE transparency", minval=0, maxval=100, group=gP2)
+fibLo     = input.float(0.620, "OTE lower", minval=0.0, maxval=1.0, step=0.001, group=gP2)
+fibHi     = input.float(0.790, "OTE upper", minval=0.0, maxval=1.0, step=0.001, group=gP2)
+showFibLn = input.bool(true, "Show the 0.62 / 0.79 guide lines", group=gP2)
+fibLnCol  = input.color(#FFFFFF, "Guide line colour", group=gP2)
+fibLnTrans= input.int(45, "Guide line transparency", minval=0, maxval=100, group=gP2)
+showFibLb = input.bool(true, "Show the 1.0 / 0.0 / level labels", group=gP2)
+fibLbCol  = input.color(#FFFFFF, "Label colour", group=gP2)
+showFibSD = input.bool(false, "Show standard-deviation targets (-0.5 / -1 / -1.5)", group=gP2)
+sdTgtCol  = input.color(#FFFFFF, "SD target colour", group=gP2)
+
+// ============================== 10 - PATTERNS ==============================
+gPt = "10 - Patterns"
+showPat  = input.bool(true, "Draw chart patterns", group=gPt)
+patFam   = input.string("All", "Pattern family", options=["All", "Reversal", "Triangle / Wedge", "Flag"], group=gPt)
+patCol   = input.color(#FFFFFF, "Line colour", group=gPt)
+patWidth = input.int(2, "Line width", minval=1, maxval=5, group=gPt)
+patNameCol = input.color(#FFFFFF, "Name colour", group=gPt)
+patSize  = input.string("Small", "Name size", options=["Tiny", "Small", "Normal", "Large"], group=gPt)
+showPatName = input.bool(true, "Show the pattern name", group=gPt)
+patTol   = input.float(0.35, "Equal-level tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=gPt)
+patMinH  = input.float(1.2, "Minimum pattern height (x ATR)", minval=0.2, maxval=10.0, step=0.1, group=gPt)
+maxPat   = input.int(4, "Patterns kept", minval=1, maxval=10, group=gPt)
+
+// ============================== 11 - VOLUME ==============================
+gV = "11 - Volume"
+showVol   = input.bool(true, "Show volume columns", group=gV)
+volUpCol  = input.color(#089981, "Buy volume colour", group=gV)
+volDnCol  = input.color(#F23645, "Sell volume colour", group=gV)
+volTrans  = input.int(45, "Volume transparency", minval=0, maxval=100, group=gV)
+showVolMa = input.bool(true, "Show volume average line", group=gV)
+volMaCol  = input.color(#FFFFFF, "Average line colour", group=gV)
+volMaW    = input.int(1, "Average line width", minval=1, maxval=5, group=gV)
+volMaLen  = input.int(20, "Average length", minval=2, maxval=200, group=gV)
+
+// ============================== VOLUME PANE ==============================
 volMa  = ta.sma(volume, volMaLen)
-volCol = close >= open ? color.new(COL_GREEN, 45) : color.new(COL_RED, 45)
+volCol = close >= open ? color.new(volUpCol, volTrans) : color.new(volDnCol, volTrans)
 plot(showVol ? volume : na, "Volume", color=volCol, style=plot.style_columns)
-plot(showVol and showVolMa ? volMa : na, "Volume avg", color=color.new(COL_WHITE, 20), linewidth=1)
+plot(showVol and showVolMa ? volMa : na, "Volume avg", color=color.new(volMaCol, 20), linewidth=volMaW)
 
 atr = ta.atr(14)
 
-// DRAWING POOLS
+// ============================== DRAWING POOLS ==============================
 var array<box>   gBox = array.new_box()
 var array<line>  gLin = array.new_line()
 var array<label> gLab = array.new_label()
 
-// No borders anywhere - Noman asked for borderless rectangles.
 f_box(left, top, right, bottom, bg) =>
     b = box.new(left, top, right, bottom, bgcolor=bg, border_color=color(na), border_width=0, force_overlay=true)
     array.push(gBox, b)
@@ -143,10 +230,10 @@ f_clearAll() =>
 
 f_zone(left, top, right, bottom, txt, col) =>
     if right > left
-        f_lab(math.round((left + right) / 2), (top + bottom) / 2, txt, color.new(col, 20), label.style_label_center, size.small)
+        f_lab(math.round((left + right) / 2), (top + bottom) / 2, txt, color.new(col, txtTrans), label.style_label_center, size.small)
     true
 
-// STATE - swing structure
+// ============================== STATE ==============================
 var array<int>   swX = array.new_int()
 var array<float> swY = array.new_float()
 var array<int>   swD = array.new_int()
@@ -157,7 +244,6 @@ var array<int>   bX2 = array.new_int()
 var array<int>   bKind = array.new_int()
 var array<int>   bDir = array.new_int()
 
-// STATE - internal structure
 var array<int>   iX1 = array.new_int()
 var array<float> iY = array.new_float()
 var array<int>   iX2 = array.new_int()
@@ -179,7 +265,6 @@ var array<int>   sD = array.new_int()
 
 var int lastSdBar = -999
 
-// PATTERN STATE - vertices only, no trade plan any more
 var array<int>   pId = array.new_int()
 var array<int>   pKind = array.new_int()
 var array<int>   pN = array.new_int()
@@ -210,12 +295,11 @@ f_pushPat(id, kind, n, x1, y1, x2, y2, x3, y3, x4, y4, x5, y5) =>
         array.shift(pX5), array.shift(pY5)
     true
 
-// PASS 1 - DETECTION
+// ============================== PASS 1 - DETECTION ==============================
 ph = ta.pivothigh(high, pivLen, pivLen)
 pl = ta.pivotlow(low, pivLen, pivLen)
 newPivot = not na(ph) or not na(pl)
 
-// internal pivots feed ONLY the internal layer
 phi = ta.pivothigh(high, pivInt, pivInt)
 pli = ta.pivotlow(low, pivInt, pivInt)
 
@@ -254,7 +338,7 @@ if upBreak
     while array.size(bX1) > maxKeep
         array.shift(bX1), array.shift(bY), array.shift(bX2), array.shift(bKind), array.shift(bDir)
     int obi = na
-    for k = 1 to 25
+    for k = 1 to obLook
         if close[k] < open[k]
             obi := k
             break
@@ -272,7 +356,7 @@ if dnBreak
     while array.size(bX1) > maxKeep
         array.shift(bX1), array.shift(bY), array.shift(bX2), array.shift(bKind), array.shift(bDir)
     int obi = na
-    for k = 1 to 25
+    for k = 1 to obLook
         if close[k] > open[k]
             obi := k
             break
@@ -282,7 +366,6 @@ if dnBreak
             array.shift(oX1), array.shift(oT), array.shift(oB)
     trend := -1
 
-// internal structure: its own pivots, its own trend, its own levels
 var float iLastH = na
 var int   iLastHx = na
 var float iLastL = na
@@ -318,7 +401,6 @@ if iDn
         array.shift(iX1), array.shift(iY), array.shift(iX2), array.shift(iKind), array.shift(iDir)
     iTrend := -1
 
-// trailing extremes - where the Strong/Weak labels sit
 var float trTop = na
 var int   trTopX = na
 var float trBot = na
@@ -338,7 +420,6 @@ if na(trBot) or low < trBot
     trBot := low
     trBotX := bar_index
 
-// Fair value gaps
 if low > high[2] and close[1] > open[1]
     array.push(fX1, bar_index - 2), array.push(fT, low), array.push(fB, high[2])
     while array.size(fX1) > maxZ
@@ -348,21 +429,19 @@ if high < low[2] and close[1] < open[1]
     while array.size(fX1) > maxZ
         array.shift(fX1), array.shift(fT), array.shift(fB)
 
-// Supply & demand
-baseLen = 6
-if not na(atr) and math.abs(close - close[baseLen]) > 2.0 * atr and bar_index - lastSdBar > baseLen + 5
+if not na(atr) and math.abs(close - close[sdBaseLen]) > sdImpulse * atr and bar_index - lastSdBar > sdBaseLen + 5
     float bT = high[1]
     float bB = low[1]
-    for k = 1 to baseLen
+    for k = 1 to sdBaseLen
         bT := math.max(bT, high[k])
         bB := math.min(bB, low[k])
-    bool up = close > close[baseLen]
-    array.push(sX1, bar_index - baseLen), array.push(sT, bT), array.push(sB, bB), array.push(sD, up ? 1 : -1)
+    bool up = close > close[sdBaseLen]
+    array.push(sX1, bar_index - sdBaseLen), array.push(sT, bT), array.push(sB, bB), array.push(sD, up ? 1 : -1)
     lastSdBar := bar_index
     while array.size(sX1) > maxZ
         array.shift(sX1), array.shift(sT), array.shift(sB), array.shift(sD)
 
-// PATTERNS
+// ---- patterns ----
 f_slope(array<int> xs, array<float> ys) =>
     int n = array.size(xs)
     float sx = 0.0
@@ -398,10 +477,7 @@ f_patName(int id) =>
         15 => "Head & Shoulder"
         => "Rising Wedge"
 
-// pattern family, so the family filter can be honoured
-f_patFam(int id) =>
-    id == 3 or id == 7 ? "Flag" : id >= 9 ? "Reversal" : "Triangle / Wedge"
-
+f_patFam(int id) => id == 3 or id == 7 ? "Flag" : id >= 9 ? "Reversal" : "Triangle / Wedge"
 f_wantFam(int id) => patFam == "All" or f_patFam(id) == patFam
 
 if showPat and newPivot and not na(atr) and array.size(swX) >= 3
@@ -506,37 +582,33 @@ if showPat and newPivot and not na(atr) and array.size(swX) >= 3
             if not drawn and bearPole and e3 == 1 and e4 == -1 and v3 < v1 and (v3 - v2) < 0.5 * pole and f_wantFam(7)
                 f_pushPat(7, 0, 4, f1, v1, f2, v2, f3, v3, f4, v4, int(na), float(na))
 
-// PASS 2 - RENDER
+// ============================== PASS 2 - RENDER ==============================
 if barstate.islast
     f_clearAll()
     int right = bar_index + zoneExt
 
-    // internal structure: dashed, tiny
     if showInt and array.size(iX1) > 0
         for i = 0 to array.size(iX1) - 1
             int kind = array.get(iKind, i)
             int dir = array.get(iDir, i)
             if (kind == 1 and showBOS) or (kind == 2 and showCHoCH)
-                color hue = dir == 1 ? COL_GREEN : COL_RED
-                f_line(array.get(iX1, i), array.get(iY, i), array.get(iX2, i), array.get(iY, i), hue, line.style_dashed, 1)
+                color hue = dir == 1 ? inBullCol : inBearCol
+                f_line(array.get(iX1, i), array.get(iY, i), array.get(iX2, i), array.get(iY, i), hue, f_sty(inStyle), inWidth)
                 f_lab(math.round((array.get(iX1, i) + array.get(iX2, i)) / 2), array.get(iY, i),
                      kind == 1 ? "BOS" : "CHoCH", hue,
-                     dir == 1 ? label.style_label_down : label.style_label_up, size.tiny)
+                     dir == 1 ? label.style_label_down : label.style_label_up, f_size(inSize))
 
-    // swing structure: solid, small
     if array.size(bX1) > 0
         for i = 0 to array.size(bX1) - 1
             int kind = array.get(bKind, i)
             int dir = array.get(bDir, i)
             if (kind == 1 and showBOS) or (kind == 2 and showCHoCH)
-                color hue = dir == 1 ? COL_GREEN : COL_RED
-                f_line(array.get(bX1, i), array.get(bY, i), array.get(bX2, i), array.get(bY, i), hue, line.style_solid, 1)
+                color hue = dir == 1 ? swBullCol : swBearCol
+                f_line(array.get(bX1, i), array.get(bY, i), array.get(bX2, i), array.get(bY, i), hue, line.style_solid, swWidth)
                 f_lab(math.round((array.get(bX1, i) + array.get(bX2, i)) / 2), array.get(bY, i),
                      kind == 1 ? "BOS" : "CHoCH", hue,
-                     dir == 1 ? label.style_label_down : label.style_label_up, size.small)
+                     dir == 1 ? label.style_label_down : label.style_label_up, f_size(swSize))
 
-    // equal highs / lows - each swing compared with the previous swing of the
-    // SAME kind, because a high is always followed by a low
     if (showEQH or showEQL) and not na(atr) and array.size(swX) > 0
         int prevHi = -1
         int prevLo = -1
@@ -549,103 +621,97 @@ if barstate.islast
                     float yp = array.get(swY, prevHi)
                     int xp = array.get(swX, prevHi)
                     if math.abs(yi - yp) <= eqTol * atr and xi > xp
-                        f_line(xp, yp, xi, yi, COL_RED, line.style_dotted, 1)
-                        f_lab(math.round((xp + xi) / 2), math.max(yi, yp), "EQH", COL_RED, label.style_label_down, size.tiny)
+                        f_line(xp, yp, xi, yi, eqhCol, f_sty(eqStyle), eqWidth)
+                        f_lab(math.round((xp + xi) / 2), math.max(yi, yp), "EQH", eqhCol, label.style_label_down, f_size(eqSize))
                 prevHi := i
             else
                 if prevLo >= 0 and showEQL
                     float yp = array.get(swY, prevLo)
                     int xp = array.get(swX, prevLo)
                     if math.abs(yi - yp) <= eqTol * atr and xi > xp
-                        f_line(xp, yp, xi, yi, COL_GREEN, line.style_dotted, 1)
-                        f_lab(math.round((xp + xi) / 2), math.min(yi, yp), "EQL", COL_GREEN, label.style_label_up, size.tiny)
+                        f_line(xp, yp, xi, yi, eqlCol, f_sty(eqStyle), eqWidth)
+                        f_lab(math.round((xp + xi) / 2), math.min(yi, yp), "EQL", eqlCol, label.style_label_up, f_size(eqSize))
                 prevLo := i
 
-    // Strong / Weak highs and lows - trend-based: in a bullish trend the
-    // standing high is the weak one and the standing low is strong
     if (showSWHigh or showSWLow) and not na(trTop) and not na(trBot)
         bool bullTrend = trend >= 0
         if showSWHigh
-            f_line(trTopX, trTop, right, trTop, COL_RED, line.style_solid, 1)
-            f_lab(right, trTop, bullTrend ? "Weak High" : "Strong High", COL_RED, label.style_label_down, size.tiny)
+            f_line(trTopX, trTop, right, trTop, swHighCol, line.style_solid, swWsWidth)
+            f_lab(right, trTop, bullTrend ? "Weak High" : "Strong High", swHighCol, label.style_label_down, f_size(swWsSize))
         if showSWLow
-            f_line(trBotX, trBot, right, trBot, COL_GREEN, line.style_solid, 1)
-            f_lab(right, trBot, bullTrend ? "Strong Low" : "Weak Low", COL_GREEN, label.style_label_up, size.tiny)
+            f_line(trBotX, trBot, right, trBot, swLowCol, line.style_solid, swWsWidth)
+            f_lab(right, trBot, bullTrend ? "Strong Low" : "Weak Low", swLowCol, label.style_label_up, f_size(swWsSize))
 
-    // liquidity zones - the standing swing levels not yet taken
     if showLQZ and not na(atr) and not na(lastH) and not na(lastL)
-        float pad = atr * 0.25
+        float pad = atr * lqzPad
         if hTaken != lastHx
-            f_box(lastHx, lastH + pad, right, lastH - pad, color.new(COL_RED, 88))
-            f_zone(lastHx, lastH + pad, right, lastH - pad, "Liq", COL_RED)
+            f_box(lastHx, lastH + pad, right, lastH - pad, color.new(lqzUpCol, lqzTrans))
+            f_zone(lastHx, lastH + pad, right, lastH - pad, "Liq", lqzUpCol)
         if lTaken != lastLx
-            f_box(lastLx, lastL + pad, right, lastL - pad, color.new(COL_GREEN, 88))
-            f_zone(lastLx, lastL + pad, right, lastL - pad, "Liq", COL_GREEN)
+            f_box(lastLx, lastL + pad, right, lastL - pad, color.new(lqzDnCol, lqzTrans))
+            f_zone(lastLx, lastL + pad, right, lastL - pad, "Liq", lqzDnCol)
 
-    // fair value gaps - white
     if showFVG and array.size(fX1) > 0
         for i = 0 to array.size(fX1) - 1
             int x = array.get(fX1, i)
             float t = array.get(fT, i)
             float b = array.get(fB, i)
-            f_box(x, t, right, b, color.new(COL_WHITE, 88))
-            f_zone(x, t, right, b, "FVG", COL_WHITE)
+            f_box(x, t, right, b, color.new(fvgCol, fvgTrans))
+            f_zone(x, t, right, b, "FVG", fvgCol)
 
-    // order blocks - white
     if showOB and array.size(oX1) > 0
         for i = 0 to array.size(oX1) - 1
             int x = array.get(oX1, i)
             float t = array.get(oT, i)
             float b = array.get(oB, i)
-            f_box(x, t, right, b, color.new(COL_WHITE, 88))
-            f_zone(x, t, right, b, "ODB", COL_WHITE)
+            f_box(x, t, right, b, color.new(obCol, obTrans))
+            f_zone(x, t, right, b, "ODB", obCol)
 
-    // supply and demand
     if showSD and array.size(sX1) > 0
         for i = 0 to array.size(sX1) - 1
             int x = array.get(sX1, i)
             float t = array.get(sT, i)
             float b = array.get(sB, i)
             bool up = array.get(sD, i) == 1
-            color hue = up ? COL_GREEN : COL_RED
-            f_box(x, t, right, b, color.new(hue, 88))
+            color hue = up ? sdDemCol : sdSupCol
+            f_box(x, t, right, b, color.new(hue, sdTrans))
             f_zone(x, t, right, b, up ? "Demand" : "Supply", hue)
 
-    // premium / discount + OTE on the trailing dealing range
     if showFib and not na(trTop) and not na(trBot) and trTop > trBot
         float rng = trTop - trBot
         float eq = trBot + rng * 0.5
         bool bull = trend >= 0
-        color oteCol = bull ? COL_GREEN : COL_RED
+        color oteCol = bull ? oteBullCol : oteBearCol
         float lvA = bull ? trBot + rng * (1.0 - fibLo) : trBot + rng * fibLo
         float lvB = bull ? trBot + rng * (1.0 - fibHi) : trBot + rng * fibHi
         float oLo = math.min(lvA, lvB)
         float oHi = math.max(lvA, lvB)
         int lx = math.min(trTopX, trBotX)
-        f_box(lx, trTop, right, eq, color.new(COL_RED, 88))
-        f_box(lx, eq, right, trBot, color.new(COL_GREEN, 88))
-        f_zone(lx, trTop, right, eq, "PREMIUM  sell", COL_RED)
-        f_zone(lx, eq, right, trBot, "DISCOUNT  buy", COL_GREEN)
+        f_box(lx, trTop, right, eq, color.new(premCol, pdTrans))
+        f_box(lx, eq, right, trBot, color.new(discCol, pdTrans))
+        f_zone(lx, trTop, right, eq, "PREMIUM  sell", premCol)
+        f_zone(lx, eq, right, trBot, "DISCOUNT  buy", discCol)
         if showOTE
-            f_box(lx, oHi, right, oLo, color.new(oteCol, 74))
+            f_box(lx, oHi, right, oLo, color.new(oteCol, oteTrans))
             f_zone(lx, oHi, right, oLo, "OTE " + str.tostring(fibLo, "#.###") + " - " + str.tostring(fibHi, "#.###"), oteCol)
-        f_line(lx, eq, right, eq, COL_WHITE, line.style_dashed, 1)
-        f_lab(right, eq, "Equilibrium", COL_WHITE, label.style_label_left, size.tiny)
-        f_line(lx, lvA, right, lvA, color.new(COL_WHITE, 45), line.style_dotted, 1)
-        f_line(lx, lvB, right, lvB, color.new(COL_WHITE, 45), line.style_dotted, 1)
-        f_lab(right, lvA, str.tostring(fibLo, "#.###"), color.new(COL_WHITE, 35), label.style_label_left, size.tiny)
-        f_lab(right, lvB, str.tostring(fibHi, "#.###"), color.new(COL_WHITE, 35), label.style_label_left, size.tiny)
-        f_lab(right, trTop, "1.0", color.new(COL_WHITE, 25), label.style_label_left, size.tiny)
-        f_lab(right, trBot, "0.0", color.new(COL_WHITE, 25), label.style_label_left, size.tiny)
+        f_line(lx, eq, right, eq, eqCol, line.style_dashed, 1)
+        if showFibLb
+            f_lab(right, eq, "Equilibrium", eqCol, label.style_label_left, size.tiny)
+        if showFibLn
+            f_line(lx, lvA, right, lvA, color.new(fibLnCol, fibLnTrans), line.style_dotted, 1)
+            f_line(lx, lvB, right, lvB, color.new(fibLnCol, fibLnTrans), line.style_dotted, 1)
+        if showFibLb
+            f_lab(right, lvA, str.tostring(fibLo, "#.###"), color.new(fibLbCol, 35), label.style_label_left, size.tiny)
+            f_lab(right, lvB, str.tostring(fibHi, "#.###"), color.new(fibLbCol, 35), label.style_label_left, size.tiny)
+            f_lab(right, trTop, "1.0", color.new(fibLbCol, 25), label.style_label_left, size.tiny)
+            f_lab(right, trBot, "0.0", color.new(fibLbCol, 25), label.style_label_left, size.tiny)
         if showFibSD
             for k = 1 to 3
                 float mult = k == 1 ? 0.5 : k == 2 ? 1.0 : 1.5
                 float lvl = bull ? trBot - rng * mult : trTop + rng * mult
-                f_line(lx, lvl, right, lvl, color.new(COL_WHITE, 45), line.style_dotted, 1)
-                f_lab(right, lvl, "-" + str.tostring(mult, "#.#") + " SD", color.new(COL_WHITE, 30), label.style_label_left, size.tiny)
+                f_line(lx, lvl, right, lvl, color.new(sdTgtCol, 45), line.style_dotted, 1)
+                f_lab(right, lvl, "-" + str.tostring(mult, "#.#") + " SD", color.new(sdTgtCol, 30), label.style_label_left, size.tiny)
 
-    // patterns - all white, no box, no Entry/TP/SL. The name sits in the
-    // middle of the formation.
     if array.size(pId) > 0
         for i = 0 to array.size(pId) - 1
             int id = array.get(pId, i)
@@ -660,7 +726,7 @@ if barstate.islast
                     float ya = j == 1 ? array.get(pY1, i) : j == 2 ? array.get(pY2, i) : j == 3 ? array.get(pY3, i) : array.get(pY4, i)
                     int xb = j == 1 ? array.get(pX2, i) : j == 2 ? array.get(pX3, i) : j == 3 ? array.get(pX4, i) : array.get(pX5, i)
                     float yb = j == 1 ? array.get(pY2, i) : j == 2 ? array.get(pY3, i) : j == 3 ? array.get(pY4, i) : array.get(pY5, i)
-                    f_line(xa, ya, xb, yb, COL_WHITE, line.style_solid, 2)
+                    f_line(xa, ya, xb, yb, patCol, line.style_solid, patWidth)
                     hiY := na(hiY) ? math.max(ya, yb) : math.max(hiY, math.max(ya, yb))
                     loY := na(loY) ? math.min(ya, yb) : math.min(loY, math.min(ya, yb))
                     lastX := xb
@@ -673,13 +739,13 @@ if barstate.islast
                 float lA = array.get(pY3, i)
                 int xd = array.get(pX4, i)
                 float lB = array.get(pY4, i)
-                f_line(xa, hA, xb, hB, COL_WHITE, line.style_solid, 2)
-                f_line(xc, lA, xd, lB, COL_WHITE, line.style_solid, 2)
+                f_line(xa, hA, xb, hB, patCol, line.style_solid, patWidth)
+                f_line(xc, lA, xd, lB, patCol, line.style_solid, patWidth)
                 hiY := math.max(hA, hB)
                 loY := math.min(lA, lB)
                 lastX := math.max(xb, xd)
-            if not na(hiY) and not na(loY)
-                f_lab(math.round((firstX + lastX) / 2), (hiY + loY) / 2, f_patName(id), COL_WHITE, label.style_label_center, size.small)</script>
+            if showPatName and not na(hiY) and not na(loY)
+                f_lab(math.round((firstX + lastX) / 2), (hiY + loY) / 2, f_patName(id), patNameCol, label.style_label_center, f_size(patSize))</script>
 <script>
 const CODE = document.getElementById('src').textContent;
 const ta  = document.getElementById('code');
