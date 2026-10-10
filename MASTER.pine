@@ -41,8 +41,9 @@ showWS    = input.bool(true, "Weak / Strong highs & lows", group=gM)
 
 gF = "4 - Premium / Discount + OTE"
 showFib = input.bool(true, "Fibonacci dealing range", group=gF)
-showOTE = input.bool(true, "OTE band", group=gF)
-fibLo   = input.float(0.618, "OTE lower", minval=0.0, maxval=1.0, step=0.001, group=gF)
+showOTE = input.bool(true, "OTE band (0.62 - 0.79)", group=gF)
+showFibSD = input.bool(false, "Standard-deviation targets (-0.5 / -1 / -1.5)", group=gF)
+fibLo   = input.float(0.620, "OTE lower", minval=0.0, maxval=1.0, step=0.001, group=gF)
 fibHi   = input.float(0.790, "OTE upper", minval=0.0, maxval=1.0, step=0.001, group=gF)
 
 gP = "5 - Patterns"
@@ -492,25 +493,46 @@ if barstate.islast
             f_box(x, t, ext, b, color.new(hue, 88), color.new(hue, 50))
             f_zone(x, t, ext, b, up ? "Demand" : "Supply", hue)
 
-    // premium / discount dealing range with the OTE band
+    // Premium / Discount dealing range with the OTE band.
+    // Straight from the ICT course: 0.5 is the equilibrium that splits premium
+    // (where you sell) from discount (where you buy), and 0.62 / 0.79 form the
+    // OTE band. The band MIRRORS with direction - a short is drawn high-to-low
+    // so its 0.62/0.79 sit in premium, a buy is drawn low-to-high so they sit
+    // in discount. Drawing the band on the wrong side would put the entry on
+    // the wrong half of the range.
     if showFib and not na(lastH) and not na(lastL) and lastH > lastL
         float rng = lastH - lastL
         float eq = lastL + rng * 0.5
-        float oLo = lastL + rng * fibLo
-        float oHi = lastL + rng * fibHi
+        bool bull = trend >= 0
+        color oteCol = bull ? COL_BULL : COL_BEAR
+        float lvA = bull ? lastL + rng * (1.0 - fibLo) : lastL + rng * fibLo
+        float lvB = bull ? lastL + rng * (1.0 - fibHi) : lastL + rng * fibHi
+        float oLo = math.min(lvA, lvB)
+        float oHi = math.max(lvA, lvB)
         int lx = lastLx
         int ext = bar_index + zoneExt
-        f_box(lx, lastH, ext, eq, color.new(COL_BEAR, 88), color.new(COL_BEAR, 70))
-        f_box(lx, eq, ext, lastL, color.new(COL_BULL, 88), color.new(COL_BULL, 70))
-        f_zone(lx, lastH, ext, eq, "PREMIUM", COL_BEAR)
-        f_zone(lx, eq, ext, lastL, "DISCOUNT", COL_BULL)
+        f_box(lx, lastH, ext, eq, color.new(COL_BEAR, 90), color.new(COL_BEAR, 72))
+        f_box(lx, eq, ext, lastL, color.new(COL_BULL, 90), color.new(COL_BULL, 72))
+        f_zone(lx, lastH, ext, eq, "PREMIUM  sell", COL_BEAR)
+        f_zone(lx, eq, ext, lastL, "DISCOUNT  buy", COL_BULL)
         if showOTE
-            f_box(lx, oHi, ext, oLo, color.new(COL_BULL, 74), color.new(COL_BULL, 35))
-            f_zone(lx, oHi, ext, oLo, "OTE", COL_BULL)
-        f_line(lx, eq, ext, eq, color.new(color.white, 30), line.style_dashed, 1)
-        f_lab(ext, eq, "0.5 EQ", color.new(color.white, 15), label.style_label_left, size.tiny)
+            f_box(lx, oHi, ext, oLo, color.new(oteCol, 74), color.new(oteCol, 30))
+            f_zone(lx, oHi, ext, oLo, "OTE " + str.tostring(fibLo, "#.###") + " - " + str.tostring(fibHi, "#.###"), oteCol)
+        f_line(lx, eq, ext, eq, color.new(color.white, 25), line.style_dashed, 1)
+        f_lab(ext, eq, "0.5  equilibrium", color.new(color.white, 15), label.style_label_left, size.tiny)
+        f_line(lx, lvA, ext, lvA, color.new(color.white, 45), line.style_dotted, 1)
+        f_line(lx, lvB, ext, lvB, color.new(color.white, 45), line.style_dotted, 1)
+        f_lab(ext, lvA, str.tostring(fibLo, "#.###"), color.new(color.white, 35), label.style_label_left, size.tiny)
+        f_lab(ext, lvB, str.tostring(fibHi, "#.###"), color.new(color.white, 35), label.style_label_left, size.tiny)
         f_lab(ext, lastH, "1.0", color.new(color.white, 25), label.style_label_left, size.tiny)
         f_lab(ext, lastL, "0.0", color.new(color.white, 25), label.style_label_left, size.tiny)
+        // standard-deviation extensions, used in the course to set targets
+        if showFibSD
+            for k = 1 to 3
+                float mult = k == 1 ? 0.5 : k == 2 ? 1.0 : 1.5
+                float lvl = bull ? lastL - rng * mult : lastH + rng * mult
+                f_line(lx, lvl, ext, lvl, color.new(COL_TP, 45), line.style_dotted, 1)
+                f_lab(ext, lvl, "-" + str.tostring(mult, "#.#") + " SD", color.new(COL_TP, 25), label.style_label_left, size.tiny)
 
     // patterns: boundary, name in the middle, and the trade plan
     for i = 0 to array.size(pId) - 1
